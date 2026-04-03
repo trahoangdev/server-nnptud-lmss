@@ -33,6 +33,12 @@ enum ClassMemberStatus {
   LEFT
 }
 
+enum SubmissionStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  LATE_SUBMITTED
+}
+
 // ==================== MODELS ====================
 
 model User {
@@ -118,4 +124,25 @@ model Assignment {
   createdBy   User? @relation(fields: [createdById], references: [id])
 
   submissions Submission[]
+}
+
+model Submission {
+  id             Int              @id @default(autoincrement())
+  content        String?
+  fileUrl        String?
+  submittedAt    DateTime         @default(now())
+  lastUpdatedAt  DateTime         @updatedAt
+  status         SubmissionStatus @default(SUBMITTED)
+
+  assignmentId Int
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  studentId Int
+  student   User @relation(fields: [studentId], references: [id])
+
+  grade Grade?
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId])
+  @@index([studentId])
 }
