@@ -28,6 +28,11 @@ enum ClassStatus {
   ARCHIVED
 }
 
+enum ClassMemberStatus {
+  ACTIVE
+  LEFT
+}
+
 // ==================== MODELS ====================
 
 model User {
@@ -41,7 +46,8 @@ model User {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  teachingClasses Class[] @relation("TeacherClasses")
+  teachingClasses  Class[]       @relation("TeacherClasses")
+  classMemberships ClassMember[]
 }
 
 model Class {
@@ -55,4 +61,21 @@ model Class {
 
   teacherId Int
   teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
+
+  members ClassMember[]
+}
+
+model ClassMember {
+  id       Int               @id @default(autoincrement())
+  classId  Int
+  userId   Int
+  joinedAt DateTime          @default(now())
+  status   ClassMemberStatus @default(ACTIVE)
+
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, userId])
+  @@index([userId])
+  @@index([classId])
 }
