@@ -9,3 +9,11 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ==================== ENUMS ====================
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
