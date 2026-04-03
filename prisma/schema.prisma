@@ -40,4 +40,19 @@ model User {
   status    UserStatus @default(ACTIVE)
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+
+  teachingClasses Class[] @relation("TeacherClasses")
+}
+
+model Class {
+  id          Int         @id @default(autoincrement())
+  name        String
+  code        String      @unique
+  description String?
+  status      ClassStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  teacherId Int
+  teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
 }
