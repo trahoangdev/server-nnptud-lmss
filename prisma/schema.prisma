@@ -50,10 +50,9 @@ model User {
   teachingClasses  Class[]       @relation("TeacherClasses")
   classMemberships ClassMember[]
 
-  // Relations — sẽ được thêm bởi TV2 (Assignment, Submission, Grade)
-  // createdAssignments Assignment[]
-  // submissions        Submission[]
-  // givenGrades        Grade[]
+  createdAssignments Assignment[]
+  submissions        Submission[]
+  givenGrades        Grade[]
 
   // Relations — sẽ được thêm bởi TV3 (Comment, Conversation, Message)
   // comments               Comment[]
@@ -79,7 +78,7 @@ model Class {
   members ClassMember[]
 
   // Relations — sẽ được thêm bởi TV2
-  // assignments Assignment[]
+  assignments Assignment[]
 
   // Relations — sẽ được thêm bởi TV3
   // conversations Conversation[]
@@ -98,4 +97,25 @@ model ClassMember {
   @@unique([classId, userId])
   @@index([userId])
   @@index([classId])
+}
+
+model Assignment {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  fileUrl     String?
+  startTime   DateTime?
+  dueDate     DateTime?
+  allowLate   Boolean   @default(false)
+  maxScore    Int       @default(10)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classId Int
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  createdById Int?
+  createdBy   User? @relation(fields: [createdById], references: [id])
+
+  submissions Submission[]
 }
