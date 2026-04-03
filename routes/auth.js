@@ -181,4 +181,79 @@ router.post("/admin/login", async (req, res) => {
   }
 });
 
+// ================== PROFILE / ME API ==================
+
+/** GET /me — lấy thông tin profile */
+router.get("/me", authenticateToken, async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, role: true, avatar: true, status: true, createdAt: true },
+    });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** PUT /me — cập nhật profile (name, email) */
+router.put("/me", authenticateToken, async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+    const { name, email } = req.body;
+    const updateData = {};
+
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Tên không được để trống" });
+      }
+      if (name.trim().length > 100) {
+        return res.status(400).json({ error: "Tên không được quá 100 ký tự" });
+      }
+      updateData.name = name.trim();
+    }
+    if (email !== undefined) {
+      if (typeof email !== "string" || !email.trim()) {
+        return res.status(400).json({ error: "Email không được để trống" });
+      }
+      if (!EMAIL_REGEX.test(email.trim())) {
+        return res.status(400).json({ error: "Email không đúng định dạng" });
+      }
+      const existing = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+      if (existing && existing.id !== userId) {
+        return res.status(400).json({ error: "Email đã được sử dụng" });
+      }
+      updateData.email = email.trim().toLowerCase();
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "Không có thông tin cần cập nhật" });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: { id: true, name: true, email: true, role: true, avatar: true, status: true, createdAt: true },
+    });
+
+    await logActivity({
+      userId,
+      userName: user.name,
+      userRole: user.role.toLowerCase(),
+      action: "Cập nhật hồ sơ",
+      actionType: "update",
+      resource: "User",
+      resourceId: userId,
+      details: `Cập nhật hồ sơ: ${Object.keys(updateData).join(", ")}`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
