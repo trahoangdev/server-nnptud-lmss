@@ -110,4 +110,36 @@ router.get("/class/:classId", authenticateToken, async (req, res) => {
   }
 });
 
+// GET /:id — chi tiết một assignment (include class info + submission count)
+router.get("/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: {
+        class: { select: { id: true, name: true, teacherId: true } },
+        _count: { select: { submissions: true } },
+      },
+    });
+
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+
+    // Access control: Student phải là member, Teacher phải là chủ lớp
+    if (req.user.role === "STUDENT") {
+      const member = await prisma.classMember.findFirst({
+        where: { classId: assignment.classId, userId: req.user.id, status: "ACTIVE" },
+      });
+      if (!member) return res.status(403).json({ error: "Không thuộc lớp này" });
+    } else if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "Không phải lớp của bạn" });
+    }
+
+    res.json(assignment);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
