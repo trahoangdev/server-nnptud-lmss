@@ -9,3 +9,93 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ==================== ENUMS ====================
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ClassStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ClassMemberStatus {
+  ACTIVE
+  LEFT
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id        Int        @id @default(autoincrement())
+  name      String
+  email     String     @unique
+  password  String
+  avatar    String?
+  role      Role       @default(STUDENT)
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relations — Class & Membership
+  teachingClasses  Class[]       @relation("TeacherClasses")
+  classMemberships ClassMember[]
+
+  // Relations — sẽ được thêm bởi TV2 (Assignment, Submission, Grade)
+  // createdAssignments Assignment[]
+  // submissions        Submission[]
+  // givenGrades        Grade[]
+
+  // Relations — sẽ được thêm bởi TV3 (Comment, Conversation, Message)
+  // comments               Comment[]
+  // conversationMemberships ConversationMember[]
+  // sentMessages           Message[]
+
+  // Relations — sẽ được thêm bởi TV4 (Notification)
+  // notifications Notification[]
+}
+
+model Class {
+  id          Int         @id @default(autoincrement())
+  name        String
+  code        String      @unique
+  description String?
+  status      ClassStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  teacherId Int
+  teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
+
+  members ClassMember[]
+
+  // Relations — sẽ được thêm bởi TV2
+  // assignments Assignment[]
+
+  // Relations — sẽ được thêm bởi TV3
+  // conversations Conversation[]
+}
+
+model ClassMember {
+  id       Int               @id @default(autoincrement())
+  classId  Int
+  userId   Int
+  joinedAt DateTime          @default(now())
+  status   ClassMemberStatus @default(ACTIVE)
+
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, userId])
+  @@index([userId])
+  @@index([classId])
+}

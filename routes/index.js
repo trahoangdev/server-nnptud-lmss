@@ -4,13 +4,17 @@
  */
 
 import express from "express";
+import authRoutes from "./auth.js";
+import classRoutes from "./classes.js";
 
 const router = express.Router();
 
+// ================== MOUNT ROUTES ==================
+router.use("/auth", authRoutes);
+router.use("/classes", classRoutes);
+
 // Các route sẽ được thêm bởi từng thành viên:
-// router.use(authRoutes);
-// router.use(classRoutes);
-// router.use(assignmentRoutes);
+// router.use('/assignments', assignmentRoutes);
 // ...
 
 export default router;
