@@ -78,4 +78,107 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// ================== LOGIN ==================
+
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || typeof email !== "string" || !email.trim()) {
+      return res.status(400).json({ error: "Vui lòng nhập email" });
+    }
+    if (!EMAIL_REGEX.test(email.trim())) {
+      return res.status(400).json({ error: "Email không đúng định dạng" });
+    }
+    if (!password || typeof password !== "string") {
+      return res.status(400).json({ error: "Vui lòng nhập mật khẩu" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Mật khẩu phải có ít nhất 6 ký tự" });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    if (!user) return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
+    if (user.status && user.status !== "ACTIVE") return res.status(403).json({ error: "Tài khoản đã bị khóa" });
+
+    const validPass = await bcrypt.compare(password, user.password);
+    if (!validPass) return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role, name: user.name },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    await logActivity({
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role.toLowerCase(),
+      action: "Đăng nhập",
+      actionType: "login",
+      resource: "Auth",
+      resourceId: user.id,
+      details: `${user.name} đăng nhập thành công`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** POST /admin/login — Admin-only login endpoint */
+router.post("/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || typeof email !== "string" || !email.trim()) {
+      return res.status(400).json({ error: "Vui lòng nhập email" });
+    }
+    if (!EMAIL_REGEX.test(email.trim())) {
+      return res.status(400).json({ error: "Email không đúng định dạng" });
+    }
+    if (!password || typeof password !== "string") {
+      return res.status(400).json({ error: "Vui lòng nhập mật khẩu" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Mật khẩu phải có ít nhất 6 ký tự" });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    if (!user || user.role !== "ADMIN") {
+      return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
+    }
+    if (user.status && user.status !== "ACTIVE") {
+      return res.status(403).json({ error: "Tài khoản đã bị khóa" });
+    }
+
+    const validPass = await bcrypt.compare(password, user.password);
+    if (!validPass) return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role, name: user.name },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    await logActivity({
+      userId: user.id,
+      userName: user.name,
+      userRole: "admin",
+      action: "Đăng nhập Admin",
+      actionType: "login",
+      resource: "Auth",
+      resourceId: user.id,
+      details: `Admin '${user.name}' đăng nhập thành công`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
