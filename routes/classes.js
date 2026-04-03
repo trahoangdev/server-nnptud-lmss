@@ -191,4 +191,138 @@ router.delete("/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), as
   }
 });
 
+// ================== JOIN CLASS BY CODE ==================
+
+router.post("/join", authenticateToken, authorizeRole(["STUDENT"]), async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: "Code required" });
+
+    const classRow = await prisma.class.findFirst({ where: { code: String(code).trim().toUpperCase(), status: "ACTIVE" } });
+    if (!classRow) return res.status(404).json({ error: "Invalid or expired class code" });
+
+    const existing = await prisma.classMember.findUnique({
+      where: { classId_userId: { classId: classRow.id, userId: req.user.id } },
+    });
+    if (existing && existing.status === "ACTIVE") return res.status(400).json({ error: "Already in this class" });
+
+    if (existing) {
+      await prisma.classMember.update({
+        where: { id: existing.id },
+        data: { status: "ACTIVE" },
+      });
+    } else {
+      await prisma.classMember.create({
+        data: { classId: classRow.id, userId: req.user.id, status: "ACTIVE" },
+      });
+    }
+
+    res.json({ message: "Joined successfully", classId: classRow.id, className: classRow.name });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ================== ENROLL STUDENT ==================
+
+router.post("/:id/enroll", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+  try {
+    const classId = parseId(req.params.id);
+    if (!classId) return res.status(400).json({ error: "ID lớp không hợp lệ" });
+
+    if (!req.body.studentId) return res.status(400).json({ error: "Provide studentId" });
+    const studentId = parseId(req.body.studentId);
+    if (!studentId) return res.status(400).json({ error: "studentId không hợp lệ" });
+
+    const studentExists = await prisma.user.findUnique({ where: { id: studentId }, select: { id: true } });
+    if (!studentExists) return res.status(404).json({ error: "Sinh viên không tồn tại" });
+
+    const access = await checkClassAccess(req, classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
+    if (access.class.teacherId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ error: "Only teacher or admin can add students" });
+    }
+
+    await prisma.classMember.upsert({
+      where: { classId_userId: { classId, userId: studentId } },
+      update: { status: "ACTIVE" },
+      create: { classId, userId: studentId, status: "ACTIVE" },
+    });
+    res.json({ message: "Enrolled successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ================== LEAVE CLASS ==================
+
+router.post("/:id/leave", authenticateToken, authorizeRole(["STUDENT"]), async (req, res) => {
+  try {
+    const classId = parseId(req.params.id);
+    if (!classId) return res.status(400).json({ error: "ID lớp không hợp lệ" });
+
+    const membership = await prisma.classMember.findUnique({
+      where: { classId_userId: { classId, userId: req.user.id } },
+    });
+    if (!membership || membership.status !== "ACTIVE") {
+      return res.status(400).json({ error: "Bạn không phải thành viên của lớp này" });
+    }
+
+    await prisma.classMember.update({
+      where: { id: membership.id },
+      data: { status: "LEFT" },
+    });
+
+    const classInfo = await prisma.class.findUnique({ where: { id: classId }, select: { name: true } });
+
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: "student",
+      action: "Rời lớp học",
+      actionType: "update",
+      resource: "Class",
+      resourceId: classId,
+      details: `Sinh viên '${req.user.name}' đã rời lớp '${classInfo?.name ?? classId}'`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ message: "Đã rời lớp thành công" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ================== REMOVE MEMBER ==================
+
+router.delete("/:id/members/:userId", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+  try {
+    const classId = parseId(req.params.id);
+    const userId = parseId(req.params.userId);
+    if (!classId || !userId) return res.status(400).json({ error: "ID không hợp lệ" });
+
+    const access = await checkClassAccess(req, classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
+    if (access.class.teacherId !== req.user.id && req.user.role !== "ADMIN") {
+      return res.status(403).json({ error: "Only teacher or admin can remove members" });
+    }
+
+    const membership = await prisma.classMember.findUnique({
+      where: { classId_userId: { classId, userId } },
+    });
+    if (!membership || membership.status !== "ACTIVE") {
+      return res.status(404).json({ error: "Member not found" });
+    }
+
+    await prisma.classMember.update({
+      where: { id: membership.id },
+      data: { status: "LEFT" },
+    });
+
+    res.json({ message: "Member removed" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
