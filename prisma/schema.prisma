@@ -46,8 +46,22 @@ model User {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
+  // Relations — Class & Membership
   teachingClasses  Class[]       @relation("TeacherClasses")
   classMemberships ClassMember[]
+
+  // Relations — sẽ được thêm bởi TV2 (Assignment, Submission, Grade)
+  // createdAssignments Assignment[]
+  // submissions        Submission[]
+  // givenGrades        Grade[]
+
+  // Relations — sẽ được thêm bởi TV3 (Comment, Conversation, Message)
+  // comments               Comment[]
+  // conversationMemberships ConversationMember[]
+  // sentMessages           Message[]
+
+  // Relations — sẽ được thêm bởi TV4 (Notification)
+  // notifications Notification[]
 }
 
 model Class {
@@ -63,6 +77,12 @@ model Class {
   teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
 
   members ClassMember[]
+
+  // Relations — sẽ được thêm bởi TV2
+  // assignments Assignment[]
+
+  // Relations — sẽ được thêm bởi TV3
+  // conversations Conversation[]
 }
 
 model ClassMember {
