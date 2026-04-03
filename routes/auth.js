@@ -7,7 +7,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../db.js";
 import { authenticateToken } from "../middleware/auth.js";
-import { logActivity, getClientIP } from "./_helpers.js";
+import { upload, logActivity, getClientIP } from "./_helpers.js";
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey123";
@@ -248,6 +248,85 @@ router.put("/me", authenticateToken, async (req, res) => {
       resourceId: userId,
       details: `Cập nhật hồ sơ: ${Object.keys(updateData).join(", ")}`,
       ipAddress: getClientIP(req),
+    });
+
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ================== CHANGE PASSWORD ==================
+
+/** PUT /change-password — đổi mật khẩu */
+router.put("/change-password", authenticateToken, async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || typeof currentPassword !== "string") {
+      return res.status(400).json({ error: "Vui lòng nhập mật khẩu hiện tại" });
+    }
+    if (!newPassword || typeof newPassword !== "string") {
+      return res.status(400).json({ error: "Vui lòng nhập mật khẩu mới" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "Mật khẩu mới phải có ít nhất 6 ký tự" });
+    }
+    if (newPassword.length > 128) {
+      return res.status(400).json({ error: "Mật khẩu không được quá 128 ký tự" });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const validPass = await bcrypt.compare(currentPassword, user.password);
+    if (!validPass) {
+      return res.status(400).json({ error: "Mật khẩu hiện tại không đúng" });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+
+    await logActivity({
+      userId,
+      userName: user.name,
+      userRole: user.role.toLowerCase(),
+      action: "Đổi mật khẩu",
+      actionType: "update",
+      resource: "User",
+      resourceId: userId,
+      details: `${user.name} đã đổi mật khẩu`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ message: "Đổi mật khẩu thành công" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ================== AVATAR UPLOAD ==================
+
+/** POST /me/avatar — upload avatar */
+router.post("/me/avatar", authenticateToken, (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.status(500).json({ error: err.message || "Upload failed" });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const userId = Number(req.user.id);
+    const avatarUrl = req.file.path;
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { avatar: avatarUrl },
+      select: { id: true, name: true, email: true, role: true, avatar: true, status: true, createdAt: true },
     });
 
     res.json(user);
