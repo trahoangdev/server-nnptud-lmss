@@ -23,6 +23,11 @@ enum UserStatus {
   INACTIVE
 }
 
+enum ClassStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 // ==================== MODELS ====================
 
 model User {
