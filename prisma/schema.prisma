@@ -9,3 +9,28 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model Assignment {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  fileUrl     String?
+  startTime   DateTime?
+  dueDate     DateTime?
+  allowLate   Boolean   @default(false)
+  maxScore    Int       @default(10)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classId Int
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  createdById Int?
+  createdBy   User? @relation(fields: [createdById], references: [id])
+
+  submissions Submission[]
+  comments    Comment[]
+
+  @@index([classId])
+  @@index([dueDate])
+}
