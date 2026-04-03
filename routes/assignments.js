@@ -78,4 +78,36 @@ router.post("/", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (
   }
 });
 
+// GET /class/:classId — danh sách assignment theo lớp (có phân trang, sort by dueDate)
+router.get("/class/:classId", authenticateToken, async (req, res) => {
+  try {
+    const classId = parseId(req.params.classId);
+    if (!classId) return res.status(400).json({ error: "classId không hợp lệ" });
+
+    // Check class access
+    const access = await checkClassAccess(req, classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
+
+    // Pagination
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const take = Math.min(Number(req.query.limit) || 50, 100);
+    const skip = (page - 1) * take;
+
+    const [assignments, total] = await Promise.all([
+      prisma.assignment.findMany({
+        where: { classId },
+        include: { _count: { select: { submissions: true } } },
+        orderBy: { dueDate: "asc" },
+        skip,
+        take,
+      }),
+      prisma.assignment.count({ where: { classId } }),
+    ]);
+
+    res.json({ data: assignments, total, page, limit: take });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
