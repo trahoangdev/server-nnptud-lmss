@@ -17,3 +17,8 @@ enum Role {
   TEACHER
   STUDENT
 }
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
