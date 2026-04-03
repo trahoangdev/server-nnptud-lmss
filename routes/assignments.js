@@ -142,4 +142,117 @@ router.get("/:id", authenticateToken, async (req, res) => {
   }
 });
 
+// PUT /:id — cập nhật assignment (Teacher/Admin only, Teacher phải là chủ lớp)
+router.put("/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: { class: { select: { teacherId: true, name: true } } },
+    });
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+
+    // Teacher phải là chủ lớp
+    if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "Không phải lớp của bạn" });
+    }
+
+    const { title, description, fileUrl, startTime, dueDate, allowLate, maxScore } = req.body;
+
+    // Validate
+    if (title !== undefined) {
+      const validTitle = validateString(title, 300);
+      if (!validTitle) return res.status(400).json({ error: "Tiêu đề không hợp lệ (tối đa 300 ký tự)" });
+    }
+    if (description !== undefined && typeof description === "string" && description.length > 50000) {
+      return res.status(400).json({ error: "Mô tả không được quá 50000 ký tự" });
+    }
+    if (dueDate !== undefined && dueDate && !isValidDate(dueDate)) {
+      return res.status(400).json({ error: "Hạn nộp không hợp lệ" });
+    }
+    if (startTime !== undefined && startTime && !isValidDate(startTime)) {
+      return res.status(400).json({ error: "Thời gian bắt đầu không hợp lệ" });
+    }
+    if (maxScore !== undefined) {
+      const parsed = parseInt(maxScore, 10);
+      if (isNaN(parsed) || parsed < 0 || parsed > 1000) {
+        return res.status(400).json({ error: "Điểm tối đa phải từ 0 đến 1000" });
+      }
+    }
+    if (fileUrl !== undefined && typeof fileUrl === "string" && fileUrl.length > 2000) {
+      return res.status(400).json({ error: "URL file không hợp lệ" });
+    }
+
+    const updated = await prisma.assignment.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title: validateString(title, 300) }),
+        ...(description !== undefined && { description }),
+        ...(fileUrl !== undefined && { fileUrl: fileUrl || null }),
+        ...(startTime !== undefined && { startTime: startTime ? new Date(startTime) : null }),
+        ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
+        ...(allowLate !== undefined && { allowLate: allowLate === true }),
+        ...(maxScore !== undefined && { maxScore: Math.max(0, parseInt(maxScore, 10)) }),
+      },
+      include: { class: { select: { id: true, name: true } } },
+    });
+
+    // Log activity
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: req.user.role.toLowerCase(),
+      action: "Cập nhật bài tập",
+      actionType: "update",
+      resource: "Assignment",
+      resourceId: id,
+      details: `Cập nhật bài '${updated.title}' của lớp ${updated.class.name}`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /:id — xóa assignment (Teacher/Admin only)
+router.delete("/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: { class: { select: { teacherId: true, name: true } } },
+    });
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+
+    if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "Không phải lớp của bạn" });
+    }
+
+    await prisma.assignment.delete({ where: { id } });
+
+    // Log activity
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: req.user.role.toLowerCase(),
+      action: "Xóa bài tập",
+      actionType: "delete",
+      resource: "Assignment",
+      resourceId: id,
+      details: `Xóa bài '${assignment.title}' của lớp ${assignment.class.name}`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ message: "Xóa bài tập thành công" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
