@@ -1,6 +1,10 @@
 import express from "express";
+import crypto from "crypto";
 import { authenticateToken } from "../middleware/auth.js";
-import { prisma } from "../prisma.js";
+import prisma from "../db.js";
+import { getIO } from "../socket.js";
+import { parseId } from "./_helpers.js";
+import { createNotification } from "./notifications.js";
 const router = express.Router();
 
 function generateRoomCode() {
@@ -453,5 +457,56 @@ router.post(
     }
   },
 );
+
+router.get(
+  "/conversations/unread-count",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const memberships = await prisma.conversationMember.findMany({
+        where: { userId },
+      });
+
+      let totalUnread = 0;
+      for (const m of memberships) {
+        const count = await prisma.message.count({
+          where: {
+            conversationId: m.conversationId,
+            createdAt: { gt: m.lastReadAt },
+            senderId: { not: userId },
+          },
+        });
+        totalUnread += count;
+      }
+
+      res.json({ unreadCount: totalUnread });
+    } catch (err) {
+      console.error("GET /conversations/unread-count error:", err);
+      res.status(500).json({ error: "Lỗi đếm tin nhắn chưa đọc" });
+    }
+  },
+);
+router.post("/conversations/:id/read", authenticateToken, async (req, res) => {
+  try {
+    const conversationId = parseId(req.params.id);
+    if (!conversationId)
+      return res.status(400).json({ error: "ID hội thoại không hợp lệ" });
+    const userId = req.user.id;
+
+    await prisma.conversationMember.update({
+      where: {
+        conversationId_userId: { conversationId, userId },
+      },
+      data: { lastReadAt: new Date() },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /conversations/:id/read error:", err);
+    res.status(500).json({ error: "Lỗi đánh dấu đã đọc" });
+  }
+});
 
 export default router;
