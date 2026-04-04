@@ -328,4 +328,130 @@ router.get(
   },
 );
 
+router.post(
+  "/conversations/:id/messages",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const conversationId = parseId(req.params.id);
+      if (!conversationId)
+        return res.status(400).json({ error: "ID hội thoại không hợp lệ" });
+      const userId = req.user.id;
+      const { content } = req.body;
+
+      if (!content?.trim()) {
+        return res
+          .status(400)
+          .json({ error: "Nội dung tin nhắn không được trống" });
+      }
+      if (content.length > 5000) {
+        return res
+          .status(400)
+          .json({ error: "Nội dung tin nhắn không được quá 5000 ký tự" });
+      }
+
+      // Verify membership
+      const membership = await prisma.conversationMember.findUnique({
+        where: {
+          conversationId_userId: { conversationId, userId },
+        },
+      });
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "Bạn không phải thành viên hội thoại này" });
+      }
+
+      // Create message
+      const message = await prisma.message.create({
+        data: {
+          conversationId,
+          senderId: userId,
+          content: content.trim(),
+        },
+      });
+
+      // Update conversation updatedAt
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      // Update sender's lastReadAt
+      await prisma.conversationMember.update({
+        where: {
+          conversationId_userId: { conversationId, userId },
+        },
+        data: { lastReadAt: new Date() },
+      });
+
+      // Get sender info
+      const sender = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, role: true },
+      });
+
+      const formatted = {
+        id: String(message.id),
+        senderId: String(message.senderId),
+        senderName: sender?.name || "Unknown",
+        senderRole: (sender?.role || "STUDENT").toLowerCase(),
+        content: message.content,
+        type: "user",
+        time: formatTime(message.createdAt),
+        date: formatDate(message.createdAt),
+        isOwn: false, // will be set client-side
+        status: "delivered",
+        conversationId: String(conversationId),
+      };
+
+      // Emit to conversation room
+      const io = getIO();
+      io.to(`conversation:${conversationId}`).emit("message:new", formatted);
+
+      // Notify other members (skip sender)
+      try {
+        const convMembers = await prisma.conversationMember.findMany({
+          where: { conversationId, userId: { not: userId } },
+          select: { userId: true },
+        });
+        const conv = await prisma.conversation.findUnique({
+          where: { id: conversationId },
+          select: { name: true },
+        });
+        const convName = conv?.name || "Hội thoại";
+        const truncatedContent =
+          content.trim().length > 80
+            ? content.trim().slice(0, 80) + "..."
+            : content.trim();
+        const memberUsers = await prisma.user.findMany({
+          where: { id: { in: convMembers.map((m) => m.userId) } },
+          select: { id: true, role: true },
+        });
+        await Promise.allSettled(
+          memberUsers.map((u) =>
+            createNotification({
+              userId: u.id,
+              type: "message",
+              title: `Tin nhắn mới - ${convName}`,
+              message: `${sender?.name || "Ai đó"}: ${truncatedContent}`,
+              link:
+                u.role === "STUDENT"
+                  ? "/student/conversations"
+                  : "/conversations",
+            }),
+          ),
+        );
+      } catch (e) {
+        console.error("Message notification error:", e.message);
+      }
+
+      res.status(201).json(formatted);
+    } catch (err) {
+      console.error("POST /conversations/:id/messages error:", err);
+      res.status(500).json({ error: "Lỗi gửi tin nhắn" });
+    }
+  },
+);
+
 export default router;
