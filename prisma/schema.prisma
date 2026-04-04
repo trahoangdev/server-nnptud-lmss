@@ -124,6 +124,10 @@ model Assignment {
   createdBy   User? @relation(fields: [createdById], references: [id])
 
   submissions Submission[]
+  comments    Comment[]
+
+  @@index([classId])
+  @@index([dueDate])
 }
 
 model Submission {

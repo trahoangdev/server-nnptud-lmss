@@ -6,6 +6,7 @@ import express from "express";
 import prisma from "../db.js";
 import { authenticateToken, authorizeRole } from "../middleware/auth.js";
 import { checkClassAccess, logActivity, getClientIP, parseId, validateString, isValidDate } from "./_helpers.js";
+import { getIO } from "../socket.js";
 
 const router = express.Router();
 
@@ -72,6 +73,21 @@ router.post("/", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (
       ipAddress: getClientIP(req),
     });
 
+    // Emit socket
+    try {
+      const io = getIO();
+      io.to(`class:${parsedClassId}`).emit("assignment:new", {
+        id: assignment.id,
+        title: assignment.title,
+        className: assignment.class.name,
+        classId: parsedClassId,
+        dueDate: assignment.dueDate,
+        teacherName: req.user.name,
+      });
+    } catch (socketErr) {
+      console.error("Socket error:", socketErr);
+    }
+
     res.status(201).json(assignment);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -96,7 +112,10 @@ router.get("/class/:classId", authenticateToken, async (req, res) => {
     const [assignments, total] = await Promise.all([
       prisma.assignment.findMany({
         where: { classId },
-        include: { _count: { select: { submissions: true } } },
+        include: {
+          class: { select: { id: true, name: true } },
+          _count: { select: { submissions: true } },
+        },
         orderBy: { dueDate: "asc" },
         skip,
         take,
@@ -120,6 +139,7 @@ router.get("/:id", authenticateToken, async (req, res) => {
       where: { id },
       include: {
         class: { select: { id: true, name: true, teacherId: true } },
+        createdBy: { select: { id: true, name: true } },
         _count: { select: { submissions: true } },
       },
     });
