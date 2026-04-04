@@ -14,6 +14,20 @@ function generateRoomCode() {
 function getConversationLink(role) {
   return role === "STUDENT" ? "/student/conversations" : "/conversations";
 }
+function formatTime(date) {
+  const d = new Date(date);
+  return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(date) {
+  const d = new Date(date);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return "Hôm nay";
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Hôm qua";
+  return d.toLocaleDateString("vi-VN");
+}
 
 async function getConversationForManagement(conversationId) {
   return prisma.conversation.findUnique({
@@ -671,126 +685,134 @@ router.post("/conversations/join", authenticateToken, async (req, res) => {
   }
 });
 
-router.post("/conversations/:id/members", authenticateToken, async (req, res) => {
-  try {
-    const conversationId = parseId(req.params.id);
-    if (!conversationId) {
-      return res.status(400).json({ error: "ID hội thoại không hợp lệ" });
-    }
-
-    const rawMemberIds = Array.isArray(req.body.memberIds)
-      ? req.body.memberIds
-      : req.body.userId !== undefined
-        ? [req.body.userId]
-        : [];
-    if (rawMemberIds.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Cần cung cấp userId hoặc memberIds" });
-    }
-
-    const parsedMemberIds = rawMemberIds.map((id) => parseId(id));
-    if (parsedMemberIds.some((id) => !id)) {
-      return res.status(400).json({ error: "Danh sách thành viên không hợp lệ" });
-    }
-
-    const memberIds = [...new Set(parsedMemberIds)];
-    const conversation = await getConversationForManagement(conversationId);
-    if (!conversation) {
-      return res.status(404).json({ error: "Hội thoại không tồn tại" });
-    }
-    if (conversation.type === "direct") {
-      return res
-        .status(400)
-        .json({ error: "Không thể thêm thành viên vào hội thoại direct" });
-    }
-
-    const ownerId = await resolveConversationOwnerId(conversation);
-    const isAdmin = req.user.role === "ADMIN";
-    if (!isAdmin && ownerId !== req.user.id) {
-      return res
-        .status(403)
-        .json({ error: "Chỉ owner hoặc admin mới được thêm thành viên" });
-    }
-
-    const existingMemberIds = new Set(
-      conversation.members.map((member) => member.userId),
-    );
-    const newMemberIds = memberIds.filter((id) => !existingMemberIds.has(id));
-    if (newMemberIds.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Tất cả người dùng này đã là thành viên" });
-    }
-
-    const users = await prisma.user.findMany({
-      where: { id: { in: newMemberIds } },
-      select: { id: true, name: true, role: true, status: true },
-    });
-    if (users.length !== newMemberIds.length) {
-      return res.status(404).json({ error: "Có thành viên không tồn tại" });
-    }
-
-    const inactiveUser = users.find((user) => user.status !== "ACTIVE");
-    if (inactiveUser) {
-      return res.status(400).json({
-        error: `Người dùng '${inactiveUser.name}' không ở trạng thái hoạt động`,
-      });
-    }
-
-    await prisma.conversationMember.createMany({
-      data: newMemberIds.map((userId) => ({
-        conversationId,
-        userId,
-      })),
-    });
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
-
-    const addedUsers = users
-      .filter((user) => newMemberIds.includes(user.id))
-      .sort((a, b) => newMemberIds.indexOf(a.id) - newMemberIds.indexOf(b.id));
-
+router.post(
+  "/conversations/:id/members",
+  authenticateToken,
+  async (req, res) => {
     try {
-      const addedNames = addedUsers.map((user) => user.name).join(", ");
-      await createSystemMessage(
+      const conversationId = parseId(req.params.id);
+      if (!conversationId) {
+        return res.status(400).json({ error: "ID hội thoại không hợp lệ" });
+      }
+
+      const rawMemberIds = Array.isArray(req.body.memberIds)
+        ? req.body.memberIds
+        : req.body.userId !== undefined
+          ? [req.body.userId]
+          : [];
+      if (rawMemberIds.length === 0) {
+        return res
+          .status(400)
+          .json({ error: "Cần cung cấp userId hoặc memberIds" });
+      }
+
+      const parsedMemberIds = rawMemberIds.map((id) => parseId(id));
+      if (parsedMemberIds.some((id) => !id)) {
+        return res
+          .status(400)
+          .json({ error: "Danh sách thành viên không hợp lệ" });
+      }
+
+      const memberIds = [...new Set(parsedMemberIds)];
+      const conversation = await getConversationForManagement(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "Hội thoại không tồn tại" });
+      }
+      if (conversation.type === "direct") {
+        return res
+          .status(400)
+          .json({ error: "Không thể thêm thành viên vào hội thoại direct" });
+      }
+
+      const ownerId = await resolveConversationOwnerId(conversation);
+      const isAdmin = req.user.role === "ADMIN";
+      if (!isAdmin && ownerId !== req.user.id) {
+        return res
+          .status(403)
+          .json({ error: "Chỉ owner hoặc admin mới được thêm thành viên" });
+      }
+
+      const existingMemberIds = new Set(
+        conversation.members.map((member) => member.userId),
+      );
+      const newMemberIds = memberIds.filter((id) => !existingMemberIds.has(id));
+      if (newMemberIds.length === 0) {
+        return res
+          .status(400)
+          .json({ error: "Tất cả người dùng này đã là thành viên" });
+      }
+
+      const users = await prisma.user.findMany({
+        where: { id: { in: newMemberIds } },
+        select: { id: true, name: true, role: true, status: true },
+      });
+      if (users.length !== newMemberIds.length) {
+        return res.status(404).json({ error: "Có thành viên không tồn tại" });
+      }
+
+      const inactiveUser = users.find((user) => user.status !== "ACTIVE");
+      if (inactiveUser) {
+        return res.status(400).json({
+          error: `Người dùng '${inactiveUser.name}' không ở trạng thái hoạt động`,
+        });
+      }
+
+      await prisma.conversationMember.createMany({
+        data: newMemberIds.map((userId) => ({
+          conversationId,
+          userId,
+        })),
+      });
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      const addedUsers = users
+        .filter((user) => newMemberIds.includes(user.id))
+        .sort(
+          (a, b) => newMemberIds.indexOf(a.id) - newMemberIds.indexOf(b.id),
+        );
+
+      try {
+        const addedNames = addedUsers.map((user) => user.name).join(", ");
+        await createSystemMessage(
+          conversationId,
+          `${req.user.name} đã thêm ${addedNames} vào hội thoại`,
+        );
+
+        await Promise.allSettled(
+          addedUsers
+            .filter((user) => user.id !== req.user.id)
+            .map((user) =>
+              createNotification({
+                userId: user.id,
+                type: "conversation",
+                title: "Bạn được thêm vào hội thoại",
+                message: `${req.user.name} đã thêm bạn vào hội thoại '${conversation.name || "Hội thoại"}'`,
+                link: getConversationLink(user.role),
+              }),
+            ),
+        );
+      } catch (e) {
+        console.error("Add member notification error:", e.message);
+      }
+
+      res.status(201).json({
+        success: true,
         conversationId,
-        `${req.user.name} đã thêm ${addedNames} vào hội thoại`,
-      );
-
-      await Promise.allSettled(
-        addedUsers
-          .filter((user) => user.id !== req.user.id)
-          .map((user) =>
-            createNotification({
-              userId: user.id,
-              type: "conversation",
-              title: "Bạn được thêm vào hội thoại",
-              message: `${req.user.name} đã thêm bạn vào hội thoại '${conversation.name || "Hội thoại"}'`,
-              link: getConversationLink(user.role),
-            }),
-          ),
-      );
-    } catch (e) {
-      console.error("Add member notification error:", e.message);
+        addedMembers: addedUsers.map((user) => ({
+          id: String(user.id),
+          name: user.name,
+          role: user.role.toLowerCase(),
+        })),
+      });
+    } catch (err) {
+      console.error("POST /conversations/:id/members error:", err);
+      res.status(500).json({ error: "Lỗi thêm thành viên" });
     }
-
-    res.status(201).json({
-      success: true,
-      conversationId,
-      addedMembers: addedUsers.map((user) => ({
-        id: String(user.id),
-        name: user.name,
-        role: user.role.toLowerCase(),
-      })),
-    });
-  } catch (err) {
-    console.error("POST /conversations/:id/members error:", err);
-    res.status(500).json({ error: "Lỗi thêm thành viên" });
-  }
-});
+  },
+);
 
 router.delete(
   "/conversations/:id/members/:userId",
