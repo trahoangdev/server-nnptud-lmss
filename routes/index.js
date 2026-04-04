@@ -8,6 +8,7 @@ import authRoutes from "./auth.js";
 import classRoutes from "./classes.js";
 import assignmentRoutes from "./assignments.js";
 import submissionRoutes from "./submissions.js";
+import gradeRoutes from "./grades.js";
 
 const router = express.Router();
 
@@ -16,5 +17,6 @@ router.use("/auth", authRoutes);
 router.use("/classes", classRoutes);
 router.use("/assignments", assignmentRoutes);
 router.use("/submissions", submissionRoutes);
+router.use("/grades", gradeRoutes);
 
 export default router;
