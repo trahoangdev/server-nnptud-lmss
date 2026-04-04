@@ -6,6 +6,23 @@ import { createNotification } from "./notifications.js";
 import { parseId } from "./_helpers.js";
 const router = express.Router();
 
+const COMMENT_USER_SELECT = {
+  id: true,
+  name: true,
+  role: true,
+  avatar: true,
+};
+
+function getPagination(query) {
+  const page = Math.max(parseInt(query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20, 1), 100);
+  return {
+    page,
+    limit,
+    skip: (page - 1) * limit,
+  };
+}
+
 router.post("/comments", authenticateToken, async (req, res) => {
   try {
     const { content, assignmentId, submissionId } = req.body;
@@ -108,6 +125,100 @@ router.post("/comments", authenticateToken, async (req, res) => {
     }
 
     res.status(201).json(comment);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/assignment/:assignmentId", authenticateToken, async (req, res) => {
+  try {
+    const id = parseId(req.params.assignmentId);
+    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+    const { page, limit, skip } = getPagination(req.query);
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      include: { class: { select: { id: true, teacherId: true } } },
+    });
+    if (!assignment)
+      return res.status(404).json({ error: "Assignment not found" });
+
+    if (req.user.role === "STUDENT") {
+      const member = await prisma.classMember.findFirst({
+        where: {
+          classId: assignment.classId,
+          userId: req.user.id,
+          status: "ACTIVE",
+        },
+      });
+      if (!member) return res.status(403).json({ error: "Not in this class" });
+    } else if (
+      req.user.role === "TEACHER" &&
+      assignment.class.teacherId !== req.user.id
+    ) {
+      return res.status(403).json({ error: "Not your class" });
+    }
+
+    const where = { assignmentId: id, submissionId: null };
+    const [comments, total] = await Promise.all([
+      prisma.comment.findMany({
+        where,
+        include: { user: { select: COMMENT_USER_SELECT } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip,
+        take: limit,
+      }),
+      prisma.comment.count({ where }),
+    ]);
+
+    res.json({ data: comments, total, page, limit });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/submission/:submissionId", authenticateToken, async (req, res) => {
+  try {
+    const id = parseId(req.params.submissionId);
+    if (!id) return res.status(400).json({ error: "ID bài nộp không hợp lệ" });
+    const { page, limit, skip } = getPagination(req.query);
+
+    const submission = await prisma.submission.findUnique({
+      where: { id },
+      include: {
+        assignment: {
+          select: {
+            class: { select: { teacherId: true } },
+          },
+        },
+      },
+    });
+    if (!submission)
+      return res.status(404).json({ error: "Submission not found" });
+
+    if (req.user.role === "STUDENT" && submission.studentId !== req.user.id) {
+      return res.status(403).json({ error: "Không có quyền xem comment bài nộp này" });
+    }
+    if (
+      req.user.role === "TEACHER" &&
+      submission.assignment.class.teacherId !== req.user.id
+    ) {
+      return res.status(403).json({ error: "Not your class" });
+    }
+
+    const where = { submissionId: id };
+    const [comments, total] = await Promise.all([
+      prisma.comment.findMany({
+        where,
+        include: { user: { select: COMMENT_USER_SELECT } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip,
+        take: limit,
+      }),
+      prisma.comment.count({ where }),
+    ]);
+
+    res.json({ data: comments, total, page, limit });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
