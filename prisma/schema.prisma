@@ -146,3 +146,17 @@ model Submission {
   @@index([assignmentId])
   @@index([studentId])
 }
+
+model Grade {
+  id           Int      @id @default(autoincrement())
+  score        Float
+  gradedAt     DateTime @default(now())
+
+  submissionId Int        @unique
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  gradedById Int
+  gradedBy   User @relation(fields: [gradedById], references: [id])
+
+  @@index([gradedById])
+}
