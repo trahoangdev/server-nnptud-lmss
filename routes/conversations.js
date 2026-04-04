@@ -146,4 +146,186 @@ router.post("/conversations", authenticateToken, async (req, res) => {
   }
 });
 
+router.get("/conversations", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const memberships = await prisma.conversationMember.findMany({
+      where: { userId },
+      include: {
+        conversation: {
+          include: {
+            members: true,
+            messages: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+            },
+            class: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: { conversation: { updatedAt: "desc" } },
+    });
+
+    // Build response matching frontend Conversation interface
+    const conversations = await Promise.all(
+      memberships.map(async (m) => {
+        const conv = m.conversation;
+        const lastMsg = conv.messages[0] || null;
+
+        // Get member details with user info
+        const memberDetails = await prisma.conversationMember.findMany({
+          where: { conversationId: conv.id },
+          include: {
+            // ConversationMember doesn't have user relation, query separately
+          },
+        });
+
+        // Get user info for all members
+        const memberUserIds = conv.members.map((mem) => mem.userId);
+        const users = await prisma.user.findMany({
+          where: { id: { in: memberUserIds } },
+          select: { id: true, name: true, role: true },
+        });
+        const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+
+        // Get sender name for last message
+        let lastMsgSender = null;
+        let lastMsgType = null;
+        if (lastMsg) {
+          lastMsgType = lastMsg.type || "user";
+          if (lastMsg.senderId === 0) {
+            lastMsgSender = "Hệ thống";
+          } else {
+            lastMsgSender = userMap[lastMsg.senderId]?.name || "Unknown";
+          }
+        }
+
+        // Count unread messages (messages after lastReadAt)
+        const unreadCount = await prisma.message.count({
+          where: {
+            conversationId: conv.id,
+            createdAt: { gt: m.lastReadAt },
+            senderId: { not: userId },
+          },
+        });
+
+        return {
+          id: String(conv.id),
+          name: conv.name || conv.class?.name || "Hội thoại",
+          type: conv.type,
+          classId: conv.classId ? String(conv.classId) : null,
+          className: conv.class?.name || "",
+          roomCode: conv.roomCode || null,
+          members: users.map((u) => ({
+            id: String(u.id),
+            name: u.name,
+            role: u.role.toLowerCase(),
+            avatar: "",
+          })),
+          lastMessage: lastMsg
+            ? {
+                content: lastMsg.content,
+                sender: lastMsgSender,
+                time: formatTime(lastMsg.createdAt),
+                isRead: lastMsg.createdAt <= m.lastReadAt,
+              }
+            : {
+                content: "Chưa có tin nhắn",
+                sender: "",
+                time: "",
+                isRead: true,
+              },
+          unreadCount,
+        };
+      }),
+    );
+
+    res.json(conversations);
+  } catch (err) {
+    console.error("GET /conversations error:", err);
+    res.status(500).json({ error: "Lỗi tải danh sách hội thoại" });
+  }
+});
+
+router.get(
+  "/conversations/:id/messages",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const conversationId = parseId(req.params.id);
+      if (!conversationId)
+        return res.status(400).json({ error: "ID hội thoại không hợp lệ" });
+      const userId = req.user.id;
+      const { cursor, limit = 50 } = req.query;
+      const parsedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+
+      // Verify membership
+      const membership = await prisma.conversationMember.findUnique({
+        where: {
+          conversationId_userId: { conversationId, userId },
+        },
+      });
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "Bạn không phải thành viên hội thoại này" });
+      }
+
+      const messages = await prisma.message.findMany({
+        where: {
+          conversationId,
+          ...(cursor ? { id: { lt: parseId(cursor) || 0 } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: parsedLimit,
+      });
+
+      // Get unique sender IDs
+      const senderIds = [...new Set(messages.map((m) => m.senderId))];
+      const users = await prisma.user.findMany({
+        where: { id: { in: senderIds } },
+        select: { id: true, name: true, role: true },
+      });
+      const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+
+      // Format messages matching frontend Message interface
+      const formatted = messages
+        .reverse() // oldest first for display
+        .map((msg) => {
+          const sender = userMap[msg.senderId];
+          return {
+            id: String(msg.id),
+            senderId: String(msg.senderId),
+            senderName: sender?.name || "Unknown",
+            senderRole: (sender?.role || "STUDENT").toLowerCase(),
+            content: msg.isRecalled ? "Tin nhắn đã được thu hồi" : msg.content,
+            type: msg.type || "user",
+            time: formatTime(msg.createdAt),
+            date: formatDate(msg.createdAt),
+            isOwn: msg.senderId === userId,
+            status: "delivered",
+            isRecalled: msg.isRecalled,
+          };
+        });
+
+      // Update lastReadAt
+      await prisma.conversationMember.update({
+        where: {
+          conversationId_userId: { conversationId, userId },
+        },
+        data: { lastReadAt: new Date() },
+      });
+
+      const hasMore = messages.length === parsedLimit;
+      const nextCursor = messages.length > 0 ? messages[0].id : null;
+
+      res.json({ messages: formatted, hasMore, nextCursor });
+    } catch (err) {
+      console.error("GET /conversations/:id/messages error:", err);
+      res.status(500).json({ error: "Lỗi tải tin nhắn" });
+    }
+  },
+);
+
 export default router;
