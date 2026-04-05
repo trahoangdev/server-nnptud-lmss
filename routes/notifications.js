@@ -67,4 +67,25 @@ router.get("/notifications/unread-count", authenticateToken, async (req, res) =>
   }
 });
 
+/** PATCH /api/notifications/:id/read — mark single notification as read */
+router.patch("/notifications/:id/read", authenticateToken, async (req, res) => {
+  try {
+    const notifId = parseId(req.params.id);
+    if (!notifId) return res.status(400).json({ error: "ID thông báo không hợp lệ" });
+    const notif = await prisma.notification.findUnique({
+      where: { id: notifId },
+    });
+    if (!notif || notif.userId !== req.user.id) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+    const updated = await prisma.notification.update({
+      where: { id: notif.id },
+      data: { isRead: true },
+    });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
