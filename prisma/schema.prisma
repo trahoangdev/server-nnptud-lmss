@@ -235,3 +235,28 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
 }
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   // JSON string
+  updatedAt DateTime @updatedAt
+}
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  userName   String
+  userRole   String
+  action     String
+  actionType String   // "create" | "update" | "delete" | "login" | "other"
+  resource   String   // "User" | "Class" | "Assignment" | "Submission" | "Grade" | "Comment" | "Auth"
+  resourceId String?
+  details    String
+  ipAddress  String?
+  status     String   @default("success") // "success" | "warning" | "error"
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([actionType])
+  @@index([resource])
+}

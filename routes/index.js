@@ -12,7 +12,9 @@ import gradeRoutes from "./grades.js";
 import commentRoutes from "./comments.js";
 import conversationRoutes from "./conversations.js";
 import notificationRoutes from "./notifications.js";
-
+import adminRoutes from "./admin.js";
+import uploadRoutes from "./upload.js";
+import dashboardRoutes from "./dashboard.js";
 const router = express.Router();
 
 // ================== MOUNT ROUTES ==================
@@ -23,5 +25,7 @@ router.use("/submissions", submissionRoutes);
 router.use("/grades", gradeRoutes);
 router.use("/comments", commentRoutes);
 router.use("/conversations", conversationRoutes);
-
+router.use('/admin', adminRoutes)
+router.use('/upload',uploadRoutes);
+router.use('/dashboard',dashboardRoutes);
 export default router;
