@@ -88,4 +88,29 @@ router.patch("/notifications/:id/read", authenticateToken, async (req, res) => {
   }
 });
 
+/** PATCH /api/notifications/read-all — mark all as read */
+router.patch("/notifications/read-all", authenticateToken, async (req, res) => {
+  try {
+    const result = await prisma.notification.updateMany({
+      where: { userId: req.user.id, isRead: false },
+      data: { isRead: true },
+    });
+    res.json({ message: "All marked as read", count: result.count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** DELETE /api/notifications/read — delete all read notifications */
+router.delete("/notifications/read", authenticateToken, async (req, res) => {
+  try {
+    const result = await prisma.notification.deleteMany({
+      where: { userId: req.user.id, isRead: true },
+    });
+    res.json({ message: "Đã xóa thông báo đã đọc", count: result.count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;
