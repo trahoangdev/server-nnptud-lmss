@@ -11,6 +11,7 @@ import submissionRoutes from "./submissions.js";
 import gradeRoutes from "./grades.js";
 import commentRoutes from "./comments.js";
 import conversationRoutes from "./conversations.js";
+import notificationRoutes from "./notifications.js";
 
 const router = express.Router();
 
