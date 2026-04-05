@@ -36,4 +36,82 @@ router.get("/admin/users", authenticateToken, authorizeRole(["ADMIN"]), async (r
   }
 });
  
+router.post("/admin/users", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    const trimmedName = validateString(name, 100);
+    if (!trimmedName) return res.status(400).json({ error: "Tên không hợp lệ (tối đa 100 ký tự)" });
+    if (!email || !isValidEmail(email)) return res.status(400).json({ error: "Email không hợp lệ" });
+    if (!password || typeof password !== "string" || password.length < 6 || password.length > 128) {
+      return res.status(400).json({ error: "Mật khẩu phải từ 6-128 ký tự" });
+    }
+    if (!["TEACHER", "STUDENT"].includes(role)) return res.status(400).json({ error: "role must be TEACHER or STUDENT" });
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) return res.status(400).json({ error: "Email already exists" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: { name: trimmedName, email: normalizedEmail, password: hashedPassword, role, status: "ACTIVE" },
+      select: { id: true, name: true, email: true, role: true, status: true },
+    });
+
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: "admin",
+      action: "Tạo tài khoản mới",
+      actionType: "create",
+      resource: "User",
+      resourceId: user.id,
+      details: `Admin tạo tài khoản ${normalizedEmail} (vai trò: ${role})`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.status(201).json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch("/admin/users/:id", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const userId = parseId(req.params.id);
+    if (!userId) return res.status(400).json({ error: "ID người dùng không hợp lệ" });
+    const { status, name, email } = req.body;
+
+    const updateData = {};
+    if (status && ["ACTIVE", "INACTIVE"].includes(status)) {
+      updateData.status = status;
+    }
+    if (name) {
+      const trimmedName = validateString(name, 100);
+      if (!trimmedName) return res.status(400).json({ error: "Tên không hợp lệ (tối đa 100 ký tự)" });
+      updateData.name = trimmedName;
+    }
+    if (email) {
+      if (!isValidEmail(email)) return res.status(400).json({ error: "Email không hợp lệ" });
+      const normalizedEmail = email.trim().toLowerCase();
+      const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+      if (existing && existing.id !== userId) {
+        return res.status(400).json({ error: "Email already exists" });
+      }
+      updateData.email = normalizedEmail;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: { id: true, name: true, email: true, role: true, status: true },
+    });
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 export default router;
