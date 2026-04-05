@@ -115,3 +115,61 @@ router.patch("/admin/users/:id", authenticateToken, authorizeRole(["ADMIN"]), as
   }
 });
 export default router;
+
+router.get("/admin/classes", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { status } = req.query;
+    const paginate = req.query.page !== undefined;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const take = Math.min(Number(req.query.limit) || 50, 100);
+
+    const where = {};
+    if (status && ["ACTIVE", "ARCHIVED"].includes(String(status))) where.status = status;
+
+    const findOpts = {
+      where,
+      include: {
+        teacher: { select: { id: true, name: true, email: true } },
+        _count: { select: { members: true, assignments: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    };
+    if (paginate) {
+      findOpts.skip = (page - 1) * take;
+      findOpts.take = take;
+    }
+
+    const classes = await prisma.class.findMany(findOpts);
+
+    if (paginate) {
+      const total = await prisma.class.count({ where });
+      return res.json({ data: classes, total, page, limit: take });
+    }
+    res.json(classes);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/admin/stats", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const [totalUsers, totalTeachers, totalStudents, totalClasses, totalAssignments, activeUsers] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: "TEACHER" } }),
+      prisma.user.count({ where: { role: "STUDENT" } }),
+      prisma.class.count(),
+      prisma.assignment.count(),
+      prisma.user.count({ where: { status: "ACTIVE" } }),
+    ]);
+    res.json({
+      totalUsers,
+      totalTeachers,
+      totalStudents,
+      totalClasses,
+      totalAssignments,
+      activeUsers,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
