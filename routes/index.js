@@ -12,6 +12,7 @@ import gradeRoutes from "./grades.js";
 import commentRoutes from "./comments.js";
 import conversationRoutes from "./conversations.js";
 import notificationRoutes from "./notifications.js";
+import adminRoutes from "./admin.js";
 
 const router = express.Router();
 
@@ -23,5 +24,5 @@ router.use("/submissions", submissionRoutes);
 router.use("/grades", gradeRoutes);
 router.use("/comments", commentRoutes);
 router.use("/conversations", conversationRoutes);
-
+router.use('/admin', adminRoutes)
 export default router;
