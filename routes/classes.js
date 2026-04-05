@@ -152,8 +152,7 @@ router.post("/classes/join", authenticateToken, authorizeRole(["STUDENT"]), asyn
           type: "SYSTEM",
           title: "Sinh viên mới tham gia lớp",
           message: `${req.user.name} đã tham gia lớp '${classRow.name}'`,
-          relatedId: classRow.id,
-          relatedType: "Class",
+          link: `/classes/${classRow.id}`,
         },
       });
     });
