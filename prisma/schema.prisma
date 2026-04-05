@@ -220,3 +220,18 @@ model Message {
   @@index([conversationId, createdAt])
   @@index([senderId])
 }
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // recipient
+  type      String   // "submission" | "grade" | "comment" | "system"
+  title     String
+  message   String
+  link      String?  // URL to navigate to
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+}

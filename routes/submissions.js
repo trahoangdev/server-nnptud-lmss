@@ -6,6 +6,7 @@ import express from "express";
 import prisma from "../db.js";
 import { authenticateToken } from "../middleware/auth.js";
 import { checkClassAccess, getClientIP, parseId, isValidDate } from "./_helpers.js";
+import { createNotification } from "./notifications.js";
 
 const router = express.Router();
 
