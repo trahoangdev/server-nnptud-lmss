@@ -173,3 +173,120 @@ router.get("/admin/stats", authenticateToken, authorizeRole(["ADMIN"]), async (r
     res.status(500).json({ error: error.message });
   }
 });
+
+router.get("/admin/settings", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const dbSettings = await prisma.setting.findMany();
+    const settingsMap = {};
+    dbSettings.forEach((s) => {
+      try {
+        settingsMap[s.key] = JSON.parse(s.value);
+      } catch {
+        settingsMap[s.key] = s.value;
+      }
+    });
+
+    const result = {
+      system: { ...DEFAULT_SETTINGS.system, ...settingsMap.system },
+      security: { ...DEFAULT_SETTINGS.security, ...settingsMap.security },
+      email: { ...DEFAULT_SETTINGS.email, ...settingsMap.email },
+      backup: { ...DEFAULT_SETTINGS.backup, ...settingsMap.backup },
+      notifications: { ...DEFAULT_SETTINGS.notifications, ...settingsMap.notifications },
+    };
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch("/admin/settings", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const VALID_SECTIONS = ["system", "security", "email", "backup", "notifications"];
+    const { system, security, email, backup, notifications } = req.body;
+    const sections = { system, security, email, backup, notifications };
+
+    // Only allow known section keys
+    const unknownKeys = Object.keys(req.body).filter(k => !VALID_SECTIONS.includes(k));
+    if (unknownKeys.length > 0) {
+      return res.status(400).json({ error: `Khóa cài đặt không hợp lệ: ${unknownKeys.join(", ")}` });
+    }
+
+    const upsertPromises = Object.entries(sections)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) =>
+        prisma.setting.upsert({
+          where: { key },
+          update: { value: JSON.stringify(value) },
+          create: { key, value: JSON.stringify(value) },
+        })
+      );
+
+    await Promise.all(upsertPromises);
+
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: req.user.role.toLowerCase(),
+      action: "Cập nhật cài đặt hệ thống",
+      actionType: "update",
+      resource: "Setting",
+      details: `Cập nhật settings: ${Object.keys(sections).filter((k) => sections[k]).join(", ")}`,
+      ipAddress: getClientIP(req),
+    });
+
+    res.json({ message: "Settings updated successfully", settings: { system, security, email, backup, notifications } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+router.get("/admin/activity-logs", authenticateToken, authorizeRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { role, actionType, status, limit = 100, offset = 0 } = req.query;
+
+    const where = {};
+    if (role && role !== "all") {
+      where.userRole = role.toLowerCase();
+    }
+    if (actionType && actionType !== "all") {
+      where.actionType = actionType;
+    }
+    if (status && status !== "all") {
+      where.status = status;
+    }
+
+    const [logs, total] = await Promise.all([
+      prisma.activityLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: Number(offset),
+        take: Number(limit),
+      }),
+      prisma.activityLog.count({ where }),
+    ]);
+
+    const formattedLogs = logs.map((log) => ({
+      id: String(log.id),
+      timestamp: log.createdAt.toISOString(),
+      userId: log.userId ? String(log.userId) : null,
+      userName: log.userName,
+      userRole: log.userRole,
+      action: log.action,
+      actionType: log.actionType,
+      resource: log.resource,
+      resourceId: log.resourceId,
+      details: log.details,
+      ipAddress: log.ipAddress || "N/A",
+      status: log.status,
+    }));
+
+    res.json({
+      logs: formattedLogs,
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
