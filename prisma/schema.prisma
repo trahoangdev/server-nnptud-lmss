@@ -1,5 +1,4 @@
 // Prisma schema - Entities & Data model
-// Mỗi thành viên sẽ thêm model của mình vào đây
 
 generator client {
   provider = "prisma-client-js"
@@ -9,8 +8,6 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
-// ==================== ENUMS ====================
 
 enum Role {
   ADMIN
@@ -39,8 +36,6 @@ enum SubmissionStatus {
   LATE_SUBMITTED
 }
 
-// ==================== MODELS ====================
-
 model User {
   id        Int        @id @default(autoincrement())
   name      String
@@ -52,27 +47,18 @@ model User {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  // Relations — Class & Membership
   teachingClasses  Class[]       @relation("TeacherClasses")
-  classMemberships ClassMember[]
-
+  classMemberships  ClassMember[]
   createdAssignments Assignment[]
   submissions        Submission[]
   givenGrades        Grade[]
-
-  // Relations — sẽ được thêm bởi TV3 (Comment, Conversation, Message)
-  comments               Comment[]
-  conversationMemberships ConversationMember[]
-  sentMessages           Message[]
-
-  // Relations — sẽ được thêm bởi TV4 (Notification)
-  // notifications Notification[]
+  comments           Comment[]
 }
 
 model Class {
   id          Int         @id @default(autoincrement())
   name        String
-  code        String      @unique
+  code        String      @unique // Mã để student join, auto generate
   description String?
   status      ClassStatus @default(ACTIVE)
   createdAt   DateTime    @default(now())
@@ -81,20 +67,16 @@ model Class {
   teacherId Int
   teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
 
-  members ClassMember[]
-
-  // Relations — sẽ được thêm bởi TV2
-  assignments Assignment[]
-
-  // Relations — sẽ được thêm bởi TV3
-  conversations Conversation[]
+  members        ClassMember[]
+  assignments    Assignment[]
+  conversations  Conversation[]
 }
 
 model ClassMember {
-  id       Int               @id @default(autoincrement())
+  id        Int              @id @default(autoincrement())
   classId  Int
   userId   Int
-  joinedAt DateTime          @default(now())
+  joinedAt DateTime         @default(now())
   status   ClassMemberStatus @default(ACTIVE)
 
   class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
@@ -109,8 +91,8 @@ model Assignment {
   id          Int       @id @default(autoincrement())
   title       String
   description String?
-  fileUrl     String?
-  startTime   DateTime?
+  fileUrl     String?   // attachment_url - file đề bài
+  startTime   DateTime? // optional - chỉ hiện sau thời điểm đó
   dueDate     DateTime?
   allowLate   Boolean   @default(false)
   maxScore    Int       @default(10)
@@ -124,23 +106,25 @@ model Assignment {
   createdBy   User? @relation(fields: [createdById], references: [id])
 
   submissions Submission[]
+  comments    Comment[]
 }
 
 model Submission {
-  id             Int              @id @default(autoincrement())
-  content        String?
-  fileUrl        String?
-  submittedAt    DateTime         @default(now())
-  lastUpdatedAt  DateTime         @updatedAt
-  status         SubmissionStatus @default(SUBMITTED)
+  id            Int              @id @default(autoincrement())
+  content       String?
+  fileUrl       String?
+  submittedAt   DateTime         @default(now())
+  lastUpdatedAt DateTime?
+  status        SubmissionStatus @default(NOT_SUBMITTED)
 
   assignmentId Int
   assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
   studentId Int
-  student   User @relation(fields: [studentId], references: [id])
+  student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
-  grade Grade?
+  grade    Grade?
+  comments Comment[]
 
   @@unique([assignmentId, studentId])
   @@index([assignmentId])
@@ -148,17 +132,15 @@ model Submission {
 }
 
 model Grade {
-  id           Int      @id @default(autoincrement())
-  score        Float
-  gradedAt     DateTime @default(now())
+  id       Int      @id @default(autoincrement())
+  score    Float
+  gradedAt DateTime @default(now())
 
   submissionId Int        @unique
   submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
-  gradedById Int
-  gradedBy   User @relation(fields: [gradedById], references: [id])
-
-  @@index([gradedById])
+  gradedById Int?
+  gradedBy   User? @relation(fields: [gradedById], references: [id])
 }
 
 model Comment {
@@ -175,6 +157,50 @@ model Comment {
   submissionId Int?
   submission   Submission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
 }
+
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   // JSON string
+  updatedAt DateTime @updatedAt
+}
+
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  userName   String
+  userRole   String
+  action     String
+  actionType String   // "create" | "update" | "delete" | "login" | "other"
+  resource   String   // "User" | "Class" | "Assignment" | "Submission" | "Grade" | "Comment" | "Auth"
+  resourceId String?
+  details    String
+  ipAddress  String?
+  status     String   @default("success") // "success" | "warning" | "error"
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([actionType])
+  @@index([resource])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // recipient
+  type      String   // "submission" | "grade" | "comment" | "system"
+  title     String
+  message   String
+  link      String?  // URL to navigate to
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ─── Conversations / Messaging ───────────────────────────────
 
 model Conversation {
   id        Int      @id @default(autoincrement())
@@ -219,44 +245,4 @@ model Message {
 
   @@index([conversationId, createdAt])
   @@index([senderId])
-}
-
-model Notification {
-  id        Int      @id @default(autoincrement())
-  userId    Int      // recipient
-  type      String   // "submission" | "grade" | "comment" | "system"
-  title     String
-  message   String
-  link      String?  // URL to navigate to
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([userId, isRead])
-  @@index([createdAt])
-}
-model Setting {
-  id        Int      @id @default(autoincrement())
-  key       String   @unique
-  value     String   // JSON string
-  updatedAt DateTime @updatedAt
-}
-model ActivityLog {
-  id         Int      @id @default(autoincrement())
-  userId     Int?
-  userName   String
-  userRole   String
-  action     String
-  actionType String   // "create" | "update" | "delete" | "login" | "other"
-  resource   String   // "User" | "Class" | "Assignment" | "Submission" | "Grade" | "Comment" | "Auth"
-  resourceId String?
-  details    String
-  ipAddress  String?
-  status     String   @default("success") // "success" | "warning" | "error"
-  createdAt  DateTime @default(now())
-
-  @@index([userId])
-  @@index([createdAt])
-  @@index([actionType])
-  @@index([resource])
 }

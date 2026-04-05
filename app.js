@@ -5,10 +5,10 @@ import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer } from "http";
+import { createServer } from "http"; // Import HTTP Server
 import router from "./routes/index.js";
 import prisma from "./db.js";
-import { initSocket } from "./socket.js";
+import { initSocket } from "./socket.js"; // Import Socket config
 
 // Load biến môi trường
 dotenv.config();
@@ -17,14 +17,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const httpServer = createServer(app);
+const httpServer = createServer(app); // Tạo HTTP Server bọc Express
 const PORT = process.env.PORT || 3000;
 
 // Khởi tạo Socket.io
 initSocket(httpServer);
 
 // ================== MIDDLEWARE ==================
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet({ contentSecurityPolicy: false })); // Security headers (CSP disabled for SPA compatibility)
 
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map(s => s.trim())
@@ -60,9 +60,11 @@ app.get("/", (req, res) => {
 // ================== SERVER START ==================
 const startServer = async () => {
   try {
+    // Kiểm tra kết nối database
     await prisma.$connect();
     console.log("✅ Connected to Database via Prisma");
 
+    // Dùng httpServer.listen thay vì app.listen
     httpServer.listen(PORT, () => {
       console.log(`🚀 Server is running on port ${PORT}`);
       console.log(`👉 API Endpoint: http://localhost:${PORT}/api`);

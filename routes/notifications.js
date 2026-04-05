@@ -1,3 +1,8 @@
+/**
+ * Notification routes — CRUD + socket emit.
+ * Notifications are created internally (from submissions, grades, comments).
+ */
+
 import express from "express";
 import prisma from "../db.js";
 import { authenticateToken } from "../middleware/auth.js";
@@ -55,7 +60,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
   }
 });
 
-/** GET /api/notifications/unread-count route*/
+/** GET /api/notifications/unread-count */
 router.get("/notifications/unread-count", authenticateToken, async (req, res) => {
   try {
     const count = await prisma.notification.count({

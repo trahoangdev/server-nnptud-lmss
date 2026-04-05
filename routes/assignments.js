@@ -6,45 +6,35 @@ import express from "express";
 import prisma from "../db.js";
 import { authenticateToken, authorizeRole } from "../middleware/auth.js";
 import { checkClassAccess, logActivity, getClientIP, parseId, validateString, isValidDate } from "./_helpers.js";
+import { getIO } from "../socket.js";
 import { createNotification } from "./notifications.js";
 
 const router = express.Router();
 
-// POST / — tạo assignment mới (Teacher/Admin only)
-router.post("/", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+router.post("/assignments", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
   try {
     const { title, description, dueDate, classId, fileUrl, startTime, allowLate, maxScore } = req.body;
 
-    // Validate required fields
     const validTitle = validateString(title, 300);
     if (!validTitle) return res.status(400).json({ error: "Tiêu đề bài tập không hợp lệ (tối đa 300 ký tự)" });
-
     if (description && typeof description === "string" && description.length > 50000) {
       return res.status(400).json({ error: "Mô tả không được quá 50000 ký tự" });
     }
-
     const parsedClassId = parseId(classId);
     if (!parsedClassId) return res.status(400).json({ error: "classId không hợp lệ" });
-
     if (dueDate && !isValidDate(dueDate)) return res.status(400).json({ error: "Hạn nộp không hợp lệ" });
     if (startTime && !isValidDate(startTime)) return res.status(400).json({ error: "Thời gian bắt đầu không hợp lệ" });
-
     if (maxScore != null) {
       const parsed = parseInt(maxScore, 10);
-      if (isNaN(parsed) || parsed < 0 || parsed > 1000) {
-        return res.status(400).json({ error: "Điểm tối đa phải từ 0 đến 1000" });
-      }
+      if (isNaN(parsed) || parsed < 0 || parsed > 1000) return res.status(400).json({ error: "Điểm tối đa phải từ 0 đến 1000" });
     }
-
     if (fileUrl && typeof fileUrl === "string" && fileUrl.length > 2000) {
       return res.status(400).json({ error: "URL file không hợp lệ" });
     }
 
-    // Check class access
     const access = await checkClassAccess(req, parsedClassId);
     if (!access.ok) return res.status(access.status).json({ error: access.message });
 
-    // Create assignment
     const assignment = await prisma.assignment.create({
       data: {
         title: validTitle,
@@ -60,7 +50,6 @@ router.post("/", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (
       include: { class: { select: { id: true, name: true } } },
     });
 
-    // Log activity
     await logActivity({
       userId: req.user.id,
       userName: req.user.name,
@@ -73,68 +62,62 @@ router.post("/", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (
       ipAddress: getClientIP(req),
     });
 
+    // Realtime: emit to class room + notify all students
+    try {
+      const io = getIO();
+      io.to(`class:${parsedClassId}`).emit("assignment:new", {
+        id: assignment.id,
+        title: assignment.title,
+        className: assignment.class.name,
+        classId: parsedClassId,
+        dueDate: assignment.dueDate,
+        teacherName: req.user.name,
+      });
+
+      // Create notifications for all active students in the class
+      const members = await prisma.classMember.findMany({
+        where: { classId: parsedClassId, status: "ACTIVE" },
+        select: { userId: true },
+      });
+      await Promise.allSettled(
+        members.map((m) =>
+          createNotification({
+            userId: m.userId,
+            type: "assignment",
+            title: "Bài tập mới",
+            message: `${req.user.name} đã giao bài '${title}' trong lớp ${assignment.class.name}`,
+            link: `/student/assignments`,
+          })
+        )
+      );
+    } catch (socketErr) {
+      console.error("Socket/notification error:", socketErr);
+    }
+
     res.status(201).json(assignment);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET /class/:classId — danh sách assignment theo lớp (có phân trang, sort by dueDate)
-router.get("/class/:classId", authenticateToken, async (req, res) => {
-  try {
-    const classId = parseId(req.params.classId);
-    if (!classId) return res.status(400).json({ error: "classId không hợp lệ" });
-
-    // Check class access
-    const access = await checkClassAccess(req, classId);
-    if (!access.ok) return res.status(access.status).json({ error: access.message });
-
-    // Pagination
-    const page = Math.max(Number(req.query.page) || 1, 1);
-    const take = Math.min(Number(req.query.limit) || 50, 100);
-    const skip = (page - 1) * take;
-
-    const [assignments, total] = await Promise.all([
-      prisma.assignment.findMany({
-        where: { classId },
-        include: { _count: { select: { submissions: true } } },
-        orderBy: { dueDate: "asc" },
-        skip,
-        take,
-      }),
-      prisma.assignment.count({ where: { classId } }),
-    ]);
-
-    res.json({ data: assignments, total, page, limit: take });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /:id — chi tiết một assignment (include class info + submission count)
-router.get("/:id", authenticateToken, async (req, res) => {
+router.get("/assignments/:id", authenticateToken, async (req, res) => {
   try {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
 
     const assignment = await prisma.assignment.findUnique({
       where: { id },
-      include: {
-        class: { select: { id: true, name: true, teacherId: true } },
-        _count: { select: { submissions: true } },
-      },
+      include: { class: { select: { id: true, name: true, teacherId: true } } },
     });
-
     if (!assignment) return res.status(404).json({ error: "Assignment not found" });
 
-    // Access control: Student phải là member, Teacher phải là chủ lớp
     if (req.user.role === "STUDENT") {
       const member = await prisma.classMember.findFirst({
         where: { classId: assignment.classId, userId: req.user.id, status: "ACTIVE" },
       });
-      if (!member) return res.status(403).json({ error: "Không thuộc lớp này" });
+      if (!member) return res.status(403).json({ error: "Not in this class" });
     } else if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
+      return res.status(403).json({ error: "Not your class" });
     }
 
     res.json(assignment);
@@ -143,114 +126,184 @@ router.get("/:id", authenticateToken, async (req, res) => {
   }
 });
 
-// PUT /:id — cập nhật assignment (Teacher/Admin only, Teacher phải là chủ lớp)
-router.put("/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+router.patch("/assignments/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
   try {
-    const id = parseId(req.params.id);
-    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+    const assignmentId = parseId(req.params.id);
+    if (!assignmentId) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
 
     const assignment = await prisma.assignment.findUnique({
-      where: { id },
-      include: { class: { select: { teacherId: true, name: true } } },
+      where: { id: assignmentId },
+      include: { class: true },
     });
     if (!assignment) return res.status(404).json({ error: "Assignment not found" });
 
-    // Teacher phải là chủ lớp
-    if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
-    }
+    const access = await checkClassAccess(req, assignment.classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
 
-    const { title, description, fileUrl, startTime, dueDate, allowLate, maxScore } = req.body;
-
-    // Validate
+    const { title, description, dueDate, fileUrl, startTime, allowLate, maxScore } = req.body;
+    const data = {};
     if (title !== undefined) {
       const validTitle = validateString(title, 300);
-      if (!validTitle) return res.status(400).json({ error: "Tiêu đề không hợp lệ (tối đa 300 ký tự)" });
+      if (!validTitle) return res.status(400).json({ error: "Tiêu đề bài tập không hợp lệ (tối đa 300 ký tự)" });
+      data.title = validTitle;
     }
-    if (description !== undefined && typeof description === "string" && description.length > 50000) {
-      return res.status(400).json({ error: "Mô tả không được quá 50000 ký tự" });
+    if (description !== undefined) {
+      if (typeof description === "string" && description.length > 50000) {
+        return res.status(400).json({ error: "Mô tả không được quá 50000 ký tự" });
+      }
+      data.description = description || null;
     }
-    if (dueDate !== undefined && dueDate && !isValidDate(dueDate)) {
-      return res.status(400).json({ error: "Hạn nộp không hợp lệ" });
+    if (dueDate !== undefined) {
+      if (dueDate && !isValidDate(dueDate)) return res.status(400).json({ error: "Hạn nộp không hợp lệ" });
+      data.dueDate = dueDate ? new Date(dueDate) : null;
     }
-    if (startTime !== undefined && startTime && !isValidDate(startTime)) {
-      return res.status(400).json({ error: "Thời gian bắt đầu không hợp lệ" });
+    if (fileUrl !== undefined) {
+      if (fileUrl && typeof fileUrl === "string" && fileUrl.length > 2000) return res.status(400).json({ error: "URL file không hợp lệ" });
+      data.fileUrl = fileUrl || null;
     }
+    if (startTime !== undefined) {
+      if (startTime && !isValidDate(startTime)) return res.status(400).json({ error: "Thời gian bắt đầu không hợp lệ" });
+      data.startTime = startTime ? new Date(startTime) : null;
+    }
+    if (allowLate !== undefined) data.allowLate = allowLate === true;
     if (maxScore !== undefined) {
       const parsed = parseInt(maxScore, 10);
-      if (isNaN(parsed) || parsed < 0 || parsed > 1000) {
-        return res.status(400).json({ error: "Điểm tối đa phải từ 0 đến 1000" });
-      }
-    }
-    if (fileUrl !== undefined && typeof fileUrl === "string" && fileUrl.length > 2000) {
-      return res.status(400).json({ error: "URL file không hợp lệ" });
+      if (isNaN(parsed) || parsed < 0 || parsed > 1000) return res.status(400).json({ error: "Điểm tối đa phải từ 0 đến 1000" });
+      data.maxScore = parsed;
     }
 
     const updated = await prisma.assignment.update({
-      where: { id },
-      data: {
-        ...(title !== undefined && { title: validateString(title, 300) }),
-        ...(description !== undefined && { description }),
-        ...(fileUrl !== undefined && { fileUrl: fileUrl || null }),
-        ...(startTime !== undefined && { startTime: startTime ? new Date(startTime) : null }),
-        ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
-        ...(allowLate !== undefined && { allowLate: allowLate === true }),
-        ...(maxScore !== undefined && { maxScore: Math.max(0, parseInt(maxScore, 10)) }),
-      },
+      where: { id: assignmentId },
+      data,
       include: { class: { select: { id: true, name: true } } },
     });
-
-    // Log activity
-    await logActivity({
-      userId: req.user.id,
-      userName: req.user.name,
-      userRole: req.user.role.toLowerCase(),
-      action: "Cập nhật bài tập",
-      actionType: "update",
-      resource: "Assignment",
-      resourceId: id,
-      details: `Cập nhật bài '${updated.title}' của lớp ${updated.class.name}`,
-      ipAddress: getClientIP(req),
-    });
-
     res.json(updated);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE /:id — xóa assignment (Teacher/Admin only)
-router.delete("/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+router.get("/classes/:classId/assignments", authenticateToken, async (req, res) => {
   try {
-    const id = parseId(req.params.id);
-    if (!id) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+    const classId = parseId(req.params.classId);
+    if (!classId) return res.status(400).json({ error: "classId không hợp lệ" });
 
-    const assignment = await prisma.assignment.findUnique({
-      where: { id },
-      include: { class: { select: { teacherId: true, name: true } } },
-    });
-    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+    const access = await checkClassAccess(req, classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
 
-    if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
+    const paginate = req.query.page !== undefined;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const take = Math.min(Number(req.query.limit) || 50, 100);
+
+    const findOpts = {
+      where: { classId: classId },
+      include: { _count: { select: { submissions: true } } },
+      orderBy: { dueDate: "asc" },
+    };
+    if (paginate) {
+      findOpts.skip = (page - 1) * take;
+      findOpts.take = take;
     }
 
-    await prisma.assignment.delete({ where: { id } });
+    const assignments = await prisma.assignment.findMany(findOpts);
 
-    // Log activity
-    await logActivity({
-      userId: req.user.id,
-      userName: req.user.name,
-      userRole: req.user.role.toLowerCase(),
-      action: "Xóa bài tập",
-      actionType: "delete",
-      resource: "Assignment",
-      resourceId: id,
-      details: `Xóa bài '${assignment.title}' của lớp ${assignment.class.name}`,
-      ipAddress: getClientIP(req),
+    if (paginate) {
+      const total = await prisma.assignment.count({ where: findOpts.where });
+      return res.json({ data: assignments, total, page, limit: take });
+    }
+    res.json(assignments);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete("/assignments/:id", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
+  try {
+    const assignmentId = parseId(req.params.id);
+    if (!assignmentId) return res.status(400).json({ error: "ID bài tập không hợp lệ" });
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { class: true },
+    });
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+    const access = await checkClassAccess(req, assignment.classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
+    await prisma.assignment.delete({
+      where: { id: assignmentId },
+    });
+    res.json({ message: "Assignment deleted" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** Student: all my assignments (from enrolled classes) with my submission status */
+router.get("/student/assignments", authenticateToken, authorizeRole(["STUDENT"]), async (req, res) => {
+  try {
+    const memberships = await prisma.classMember.findMany({
+      where: { userId: req.user.id, status: "ACTIVE" },
+      select: { classId: true },
+    });
+    const classIds = memberships.map((m) => m.classId);
+    if (classIds.length === 0) return res.json([]);
+
+    const assignments = await prisma.assignment.findMany({
+      where: { classId: { in: classIds } },
+      include: {
+        class: { select: { id: true, name: true } },
+      },
+      orderBy: { dueDate: "asc" },
     });
 
-    res.json({ message: "Xóa bài tập thành công" });
+    const submissionMap = {};
+    const subs = await prisma.submission.findMany({
+      where: {
+        assignmentId: { in: assignments.map((a) => a.id) },
+        studentId: req.user.id,
+      },
+      include: { grade: true },
+    });
+    subs.forEach((s) => {
+      submissionMap[s.assignmentId] = s;
+    });
+
+    const result = assignments.map((a) => {
+      const sub = submissionMap[a.id];
+      return {
+        assignment: {
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          fileUrl: a.fileUrl,
+          dueDate: a.dueDate,
+          allowLate: a.allowLate,
+          maxScore: a.maxScore ?? 10,
+          classId: a.classId,
+        },
+        class: a.class,
+        mySubmission: sub
+          ? {
+              id: sub.id,
+              assignmentId: sub.assignmentId,
+              studentId: sub.studentId,
+              fileUrl: sub.fileUrl,
+              content: sub.content,
+              submittedAt: sub.submittedAt,
+              lastUpdatedAt: sub.lastUpdatedAt,
+              status: sub.status,
+              grade: sub.grade
+                ? {
+                    id: sub.grade.id,
+                    score: Number(sub.grade.score),
+                    gradedAt: sub.grade.gradedAt instanceof Date ? sub.grade.gradedAt.toISOString() : sub.grade.gradedAt,
+                  }
+                : null,
+            }
+          : null,
+      };
+    });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

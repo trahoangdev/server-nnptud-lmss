@@ -1,140 +1,98 @@
 /**
- * Grade routes — chấm điểm bài nộp
+ * Grade routes — upsert grade with socket notification
  */
 
 import express from "express";
 import prisma from "../db.js";
-import { authenticateToken } from "../middleware/auth.js";
-import { parseId, getClientIP } from "./_helpers.js";
+import { authenticateToken, authorizeRole } from "../middleware/auth.js";
+import { checkClassAccess, logActivity, getClientIP, parseId } from "./_helpers.js";
+import { getIO } from "../socket.js";
 import { createNotification } from "./notifications.js";
 
 const router = express.Router();
 
-// POST / — chấm điểm (Teacher/Admin)
-router.post("/", authenticateToken, async (req, res) => {
+router.post("/grades", authenticateToken, authorizeRole(["TEACHER", "ADMIN"]), async (req, res) => {
   try {
-    if (req.user.role === "STUDENT") {
-      return res.status(403).json({ error: "Sinh viên không có quyền chấm điểm" });
-    }
-
     const { submissionId, score } = req.body;
 
-    const subId = parseId(submissionId);
-    if (!subId) return res.status(400).json({ error: "submissionId không hợp lệ" });
-
-    if (typeof score !== "number" || isNaN(score)) {
-      return res.status(400).json({ error: "score phải là số" });
+    const parsedSubmissionId = parseId(submissionId);
+    if (!parsedSubmissionId) return res.status(400).json({ error: "submissionId không hợp lệ" });
+    if (score === undefined || score === null || score === "") {
+      return res.status(400).json({ error: "Vui lòng nhập điểm" });
     }
+    const numScore = parseFloat(score);
+    if (isNaN(numScore)) return res.status(400).json({ error: "Điểm phải là số" });
 
     const submission = await prisma.submission.findUnique({
-      where: { id: subId },
-      include: {
-        assignment: {
-          select: {
-            id: true,
-            title: true,
-            maxScore: true,
-            class: { select: { id: true, teacherId: true } },
-          },
-        },
-      },
+      where: { id: parsedSubmissionId },
+      include: { assignment: true },
     });
     if (!submission) return res.status(404).json({ error: "Submission not found" });
 
-    if (req.user.role === "TEACHER" && submission.assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
-    }
+    const access = await checkClassAccess(req, submission.assignment.classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
 
-    if (score < 0 || score > submission.assignment.maxScore) {
-      return res.status(400).json({
-        error: `Score phải từ 0 đến ${submission.assignment.maxScore}`,
-      });
+    const maxScore = submission.assignment.maxScore ?? 10;
+    if (numScore < 0 || numScore > maxScore) {
+      return res.status(400).json({ error: `Score must be between 0 and ${maxScore}` });
     }
 
     const grade = await prisma.grade.upsert({
-      where: { submissionId: subId },
+      where: { submissionId: parsedSubmissionId },
+      update: { score: numScore, gradedById: req.user.id, gradedAt: new Date() },
       create: {
-        score,
-        submissionId: subId,
+        submissionId: parsedSubmissionId,
+        score: numScore,
         gradedById: req.user.id,
       },
-      update: {
-        score,
-        gradedById: req.user.id,
-      },
-      include: {
-        submission: {
-          include: {
-            student: { select: { id: true, name: true, email: true } },
-            assignment: { select: { id: true, title: true } },
-          },
-        },
-        gradedBy: { select: { id: true, name: true } },
-      },
     });
 
-    // Update submission status
-    await prisma.submission.update({
-      where: { id: subId },
-      data: { status: "GRADED" },
-    });
-
-    // Log
-    await prisma.activityLog.create({
-      data: {
-        userId: req.user.id,
-        userName: req.user.name,
-        userRole: req.user.role.toLowerCase(),
-        action: "Chấm điểm",
-        actionType: "create",
-        resource: "Grade",
-        resourceId: grade.id,
-        details: `Chấm ${score}/${submission.assignment.maxScore} cho '${submission.assignment.title}' — ${grade.submission.student.name}`,
-        ipAddress: getClientIP(req),
-        status: "SUCCESS",
-      },
-    });
-
-    res.status(201).json(grade);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /:submissionId — lấy điểm của bài nộp
-router.get("/:submissionId", authenticateToken, async (req, res) => {
-  try {
-    const submissionId = parseId(req.params.submissionId);
-    if (!submissionId) return res.status(400).json({ error: "submissionId không hợp lệ" });
-
-    const submission = await prisma.submission.findUnique({
-      where: { id: submissionId },
-      include: { assignment: { select: { class: { select: { teacherId: true } } } } },
-    });
-    if (!submission) return res.status(404).json({ error: "Submission not found" });
-
-    if (
-      req.user.role === "STUDENT" &&
-      submission.studentId !== req.user.id &&
-      submission.assignment.class.teacherId !== req.user.id
-    ) {
-      return res.status(403).json({ error: "Không có quyền xem điểm này" });
+    try {
+      const io = getIO();
+      io.to(`user:${submission.studentId}`).emit("grade:updated", {
+        submission_id: submission.id,
+        score: grade.score,
+        graded_at: grade.gradedAt,
+        assignment_title: submission.assignment.title,
+      });
+      io.to(`assignment:${submission.assignmentId}`).emit("grade:updated", {
+        submission_id: submission.id,
+        score: grade.score,
+        student_id: submission.studentId,
+      });
+      io.to(`class:${submission.assignment.classId}`).emit("grade:updated", {
+        submission_id: submission.id,
+        score: grade.score,
+        student_id: submission.studentId,
+      });
+    } catch (e) {
+      console.error("Socket error:", e.message);
     }
 
-    const grade = await prisma.grade.findUnique({
-      where: { submissionId },
-      include: {
-        gradedBy: { select: { id: true, name: true } },
-        submission: {
-          include: {
-            student: { select: { id: true, name: true } },
-            assignment: { select: { id: true, title: true, maxScore: true } },
-          },
-        },
-      },
-    });
+    // Notify student
+    try {
+      createNotification({
+        userId: submission.studentId,
+        type: "grade",
+        title: "Đã chấm điểm",
+        message: `Bài '${submission.assignment.title}' được chấm ${grade.score} điểm`,
+        link: `/student/assignments/${submission.assignmentId}`,
+      });
+    } catch (e) {
+      console.error("Notification error:", e.message);
+    }
 
-    if (!grade) return res.status(404).json({ error: "Chưa có điểm cho bài nộp này" });
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: req.user.role.toLowerCase(),
+      action: "Chấm điểm bài tập",
+      actionType: "update",
+      resource: "Grade",
+      resourceId: grade.id,
+      details: `Chấm điểm ${grade.score} cho submission #${submission.id}`,
+      ipAddress: getClientIP(req),
+    });
 
     res.json(grade);
   } catch (error) {

@@ -1,5 +1,5 @@
 /**
- * Auth routes — register, login, profile management
+ * Auth routes — POST /register, POST /login, GET /me, PATCH /me, PATCH /me/password
  */
 
 import express from "express";
@@ -13,8 +13,6 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey123";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ROLES = ["STUDENT", "TEACHER"];
-
-// ================== REGISTER ==================
 
 router.post("/register", async (req, res) => {
   try {
@@ -46,23 +44,17 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Vai trò không hợp lệ" });
     }
 
-    const existing = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    const existing = await prisma.user.findUnique({ where: { email: email.trim() } });
     if (existing) return res.status(400).json({ error: "Email đã được sử dụng" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        password: hashedPassword,
-        role: role || "STUDENT",
-        status: "ACTIVE",
-      },
+      data: { name: name.trim(), email: email.trim().toLowerCase(), password: hashedPassword, role: role || "STUDENT", status: "ACTIVE" },
     });
 
     await logActivity({
       userId: user.id,
-      userName: name.trim(),
+      userName: name,
       userRole: (role || "STUDENT").toLowerCase(),
       action: "Đăng ký tài khoản",
       actionType: "create",
@@ -78,12 +70,9 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// ================== LOGIN ==================
-
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
     if (!email || typeof email !== "string" || !email.trim()) {
       return res.status(400).json({ error: "Vui lòng nhập email" });
     }
@@ -96,7 +85,6 @@ router.post("/login", async (req, res) => {
     if (password.length < 6) {
       return res.status(400).json({ error: "Mật khẩu phải có ít nhất 6 ký tự" });
     }
-
     const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
     if (!user) return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
     if (user.status && user.status !== "ACTIVE") return res.status(403).json({ error: "Tài khoản đã bị khóa" });
@@ -132,7 +120,6 @@ router.post("/login", async (req, res) => {
 router.post("/admin/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
     if (!email || typeof email !== "string" || !email.trim()) {
       return res.status(400).json({ error: "Vui lòng nhập email" });
     }
@@ -145,7 +132,6 @@ router.post("/admin/login", async (req, res) => {
     if (password.length < 6) {
       return res.status(400).json({ error: "Mật khẩu phải có ít nhất 6 ký tự" });
     }
-
     const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
     if (!user || user.role !== "ADMIN") {
       return res.status(400).json({ error: "Email hoặc mật khẩu không đúng" });
@@ -181,9 +167,8 @@ router.post("/admin/login", async (req, res) => {
   }
 });
 
-// ================== PROFILE / ME API ==================
+/* ================== PROFILE / ME API ================== */
 
-/** GET /me — lấy thông tin profile */
 router.get("/me", authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.id);
@@ -198,8 +183,8 @@ router.get("/me", authenticateToken, async (req, res) => {
   }
 });
 
-/** PUT /me — cập nhật profile (name, email) */
-router.put("/me", authenticateToken, async (req, res) => {
+/** Update profile (name, email) */
+router.patch("/me", authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.id);
     const { name, email } = req.body;
@@ -256,10 +241,8 @@ router.put("/me", authenticateToken, async (req, res) => {
   }
 });
 
-// ================== CHANGE PASSWORD ==================
-
-/** PUT /change-password — đổi mật khẩu */
-router.put("/change-password", authenticateToken, async (req, res) => {
+/** Change password */
+router.patch("/me/password", authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.id);
     const { currentPassword, newPassword } = req.body;
@@ -309,9 +292,7 @@ router.put("/change-password", authenticateToken, async (req, res) => {
   }
 });
 
-// ================== AVATAR UPLOAD ==================
-
-/** POST /me/avatar — upload avatar */
+/** Upload avatar */
 router.post("/me/avatar", authenticateToken, (req, res, next) => {
   upload.single("file")(req, res, (err) => {
     if (err) return res.status(500).json({ error: err.message || "Upload failed" });

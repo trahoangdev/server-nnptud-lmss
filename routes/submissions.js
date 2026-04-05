@@ -1,97 +1,113 @@
 /**
- * Submission routes — student submission handling
+ * Submission routes — create/upsert, list by assignment
  */
 
 import express from "express";
 import prisma from "../db.js";
-import { authenticateToken } from "../middleware/auth.js";
-import { checkClassAccess, getClientIP, parseId, isValidDate } from "./_helpers.js";
+import { authenticateToken, authorizeRole } from "../middleware/auth.js";
+import { checkClassAccess, logActivity, getClientIP, parseId } from "./_helpers.js";
+import { getIO } from "../socket.js";
 import { createNotification } from "./notifications.js";
 
 const router = express.Router();
 
-// POST / — nộp bài (Student only)
-router.post("/", authenticateToken, async (req, res) => {
+router.post("/submissions", authenticateToken, authorizeRole(["STUDENT"]), async (req, res) => {
   try {
-    if (req.user.role !== "STUDENT") {
-      return res.status(403).json({ error: "Chỉ sinh viên mới được nộp bài" });
-    }
+    const { content, fileUrl, assignmentId } = req.body;
 
-    const { assignmentId, content, fileUrl } = req.body;
-
-    const id = parseId(assignmentId);
-    if (!id) return res.status(400).json({ error: "assignmentId không hợp lệ" });
-
-    // Check assignment exists
-    const assignment = await prisma.assignment.findUnique({
-      where: { id },
-      include: { class: { select: { id: true, name: true, teacherId: true } } },
-    });
-    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
-
-    // Check membership
-    const member = await prisma.classMember.findFirst({
-      where: { classId: assignment.classId, userId: req.user.id, status: "ACTIVE" },
-    });
-    if (!member) return res.status(403).json({ error: "Không thuộc lớp này" });
-
-    // Validate content
-    if (!content && !fileUrl) {
-      return res.status(400).json({ error: "Cần cung cấp content hoặc fileUrl" });
-    }
-    if (content && typeof content === "string" && content.length > 100000) {
-      return res.status(400).json({ error: "Nội dung không được quá 100000 ký tự" });
+    const parsedAssignmentId = parseId(assignmentId);
+    if (!parsedAssignmentId) return res.status(400).json({ error: "assignmentId không hợp lệ" });
+    if (content && typeof content === "string" && content.length > 50000) {
+      return res.status(400).json({ error: "Nội dung bài nộp không được quá 50000 ký tự" });
     }
     if (fileUrl && typeof fileUrl === "string" && fileUrl.length > 2000) {
       return res.status(400).json({ error: "URL file không hợp lệ" });
     }
-
-    // Determine status
-    let status = "SUBMITTED";
-    if (assignment.dueDate) {
-      const now = new Date();
-      const dueDate = new Date(assignment.dueDate);
-      if (now > dueDate && !assignment.allowLate) {
-        return res.status(400).json({ error: "Đã quá hạn nộp và không cho phép nộp muộn" });
-      }
-      if (now > dueDate && assignment.allowLate) {
-        status = "LATE_SUBMITTED";
-      }
+    if (!content?.trim() && !fileUrl) {
+      return res.status(400).json({ error: "Vui lòng nhập nội dung hoặc đính kèm file" });
     }
 
-    // Upsert submission
+    const assignment = await prisma.assignment.findUnique({
+      where: { id: parsedAssignmentId },
+      include: { class: true },
+    });
+    if (!assignment) return res.status(404).json({ error: "Assignment not found" });
+
+    const member = await prisma.classMember.findFirst({
+      where: { classId: assignment.classId, userId: req.user.id, status: "ACTIVE" },
+    });
+    if (!member) return res.status(403).json({ error: "Not in this class" });
+
+    const now = new Date();
+    const due = assignment.dueDate ? new Date(assignment.dueDate) : null;
+    let status = "SUBMITTED";
+    if (due && now > due) {
+      if (!assignment.allowLate) {
+        return res.status(400).json({ error: "Deadline passed. Late submission not allowed." });
+      }
+      status = "LATE_SUBMITTED";
+    }
+
     const submission = await prisma.submission.upsert({
-      where: { assignmentId_studentId: { assignmentId: id, studentId: req.user.id } },
+      where: {
+        assignmentId_studentId: { assignmentId: parsedAssignmentId, studentId: req.user.id },
+      },
+      update: {
+        content: content ?? undefined,
+        fileUrl: fileUrl ?? undefined,
+        status,
+        lastUpdatedAt: now,
+        submittedAt: now,
+      },
       create: {
         content: content || null,
         fileUrl: fileUrl || null,
-        status,
-        assignmentId: id,
+        assignmentId: parsedAssignmentId,
         studentId: req.user.id,
-      },
-      update: {
-        content: content || null,
-        fileUrl: fileUrl || null,
         status,
-        submittedAt: new Date(),
+        lastUpdatedAt: now,
       },
-      include: { assignment: { select: { id: true, title: true, class: { select: { name: true } } } } },
+      include: { student: { select: { id: true, name: true, email: true } }, grade: true },
     });
 
-    // Log activity
-    await prisma.activityLog.create({
-      data: {
-        userId: req.user.id,
-        userName: req.user.name,
-        userRole: req.user.role.toLowerCase(),
-        action: "Nộp bài tập",
-        actionType: "create",
-        resource: "Submission",
-        resourceId: submission.id,
-        details: `Nộp bài '${assignment.title}' (${status})`,
-        ipAddress: getClientIP(req),
-        status: "SUCCESS",
-      },
+    try {
+      const io = getIO();
+      io.to(`class:${assignment.classId}`).emit("submission:new", {
+        assignment_id: assignment.id,
+        submission_id: submission.id,
+        student_id: submission.studentId,
+        submitted_at: submission.submittedAt,
+        status,
+      });
+      io.to(`assignment:${assignment.id}`).emit("submission:updated", { submission_id: submission.id, status });
+    } catch (e) {
+      console.error("Socket error:", e.message);
+    }
+
+    // Notify teacher
+    try {
+      await createNotification({
+        userId: assignment.class.teacherId,
+        type: "submission",
+        title: "Bài nộp mới",
+        message: `${req.user.name} đã nộp bài '${assignment.title}'`,
+        link: `/assignments/${assignment.id}`,
+      });
+    } catch (e) {
+      console.error("Notification error:", e.message);
+    }
+
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: "student",
+      action: "Nộp bài tập",
+      actionType: "create",
+      resource: "Submission",
+      resourceId: submission.id,
+      details: `Nộp bài '${assignment.title}' cho lớp ${assignment.class.name}`,
+      ipAddress: getClientIP(req),
+      status: status === "LATE_SUBMITTED" ? "warning" : "success",
     });
 
     res.status(201).json(submission);
@@ -100,138 +116,79 @@ router.post("/", authenticateToken, async (req, res) => {
   }
 });
 
-// GET /assignment/:assignmentId — danh sách bài nộp theo assignment (Teacher/Admin)
-router.get("/assignment/:assignmentId", authenticateToken, async (req, res) => {
+/** Student: cancel (delete) own submission — only if not graded & before deadline */
+router.delete("/submissions/:id", authenticateToken, authorizeRole(["STUDENT"]), async (req, res) => {
+  try {
+    const submissionId = parseId(req.params.id);
+    if (!submissionId) return res.status(400).json({ error: "ID bài nộp không hợp lệ" });
+
+    const submission = await prisma.submission.findUnique({
+      where: { id: submissionId },
+      include: { assignment: true, grade: true },
+    });
+    if (!submission) return res.status(404).json({ error: "Submission not found" });
+    if (submission.studentId !== req.user.id) return res.status(403).json({ error: "Not your submission" });
+    if (submission.grade) return res.status(400).json({ error: "Cannot cancel a graded submission" });
+
+    const now = new Date();
+    const due = submission.assignment.dueDate ? new Date(submission.assignment.dueDate) : null;
+    if (due && now > due) {
+      return res.status(400).json({ error: "Cannot cancel after deadline" });
+    }
+
+    await prisma.submission.delete({ where: { id: submissionId } });
+
+    try {
+      const io = getIO();
+      io.to(`assignment:${submission.assignmentId}`).emit("submission:updated", { submission_id: submissionId, status: "CANCELLED" });
+    } catch (e) { /* ignore */ }
+
+    await logActivity({
+      userId: req.user.id,
+      userName: req.user.name,
+      userRole: "student",
+      action: "Huỷ nộp bài",
+      actionType: "delete",
+      resource: "Submission",
+      resourceId: submissionId,
+      details: `Huỷ nộp bài '${submission.assignment.title}'`,
+      ipAddress: getClientIP(req),
+      status: "info",
+    });
+
+    res.json({ message: "Submission cancelled" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get("/assignments/:assignmentId/submissions", authenticateToken, async (req, res) => {
   try {
     const assignmentId = parseId(req.params.assignmentId);
     if (!assignmentId) return res.status(400).json({ error: "assignmentId không hợp lệ" });
 
     const assignment = await prisma.assignment.findUnique({
       where: { id: assignmentId },
-      include: { class: { select: { teacherId: true } } },
+      include: { class: true },
     });
     if (!assignment) return res.status(404).json({ error: "Assignment not found" });
 
-    // Access check
     if (req.user.role === "STUDENT") {
-      return res.status(403).json({ error: "Chỉ giáo viên hoặc admin mới xem được" });
+      const subs = await prisma.submission.findMany({
+        where: { assignmentId, studentId: req.user.id },
+        include: { grade: true },
+      });
+      return res.json(subs);
     }
-    if (req.user.role === "TEACHER" && assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
-    }
 
-    const { page = 1, limit = 50 } = req.query;
-    const skip = (Math.max(1, parseInt(page)) - 1) * Math.min(100, parseInt(limit));
-    const take = Math.min(100, Math.max(1, parseInt(limit)));
+    const access = await checkClassAccess(req, assignment.classId);
+    if (!access.ok) return res.status(access.status).json({ error: access.message });
 
-    const [submissions, total] = await Promise.all([
-      prisma.submission.findMany({
-        where: { assignmentId },
-        include: {
-          student: { select: { id: true, name: true, email: true } },
-          grade: { select: { id: true, score: true, gradedAt: true } },
-        },
-        orderBy: { submittedAt: "desc" },
-        skip,
-        take,
-      }),
-      prisma.submission.count({ where: { assignmentId } }),
-    ]);
-
-    res.json({ data: submissions, total, page: parseInt(page), limit: take });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET /:id — chi tiết bài nộp
-router.get("/:id", authenticateToken, async (req, res) => {
-  try {
-    const id = parseId(req.params.id);
-    if (!id) return res.status(400).json({ error: "ID bài nộp không hợp lệ" });
-
-    const submission = await prisma.submission.findUnique({
-      where: { id },
-      include: {
-        student: { select: { id: true, name: true, email: true, avatar: true } },
-        assignment: {
-          select: {
-            id: true,
-            title: true,
-            maxScore: true,
-            class: { select: { id: true, teacherId: true } },
-          },
-        },
-        grade: { select: { id: true, score: true, gradedAt: true } },
-      },
+    const submissions = await prisma.submission.findMany({
+      where: { assignmentId },
+      include: { student: { select: { id: true, name: true, email: true } }, grade: true },
     });
-    if (!submission) return res.status(404).json({ error: "Submission not found" });
-
-    // Access check
-    if (req.user.role === "STUDENT" && submission.studentId !== req.user.id) {
-      return res.status(403).json({ error: "Không có quyền xem bài nộp này" });
-    }
-    if (req.user.role === "TEACHER" && submission.assignment.class.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "Không phải lớp của bạn" });
-    }
-
-    res.json(submission);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// PUT /:id — cập nhật / resubmit bài nộp (chỉ owner)
-router.put("/:id", authenticateToken, async (req, res) => {
-  try {
-    const id = parseId(req.params.id);
-    if (!id) return res.status(400).json({ error: "ID bài nộp không hợp lệ" });
-
-    const submission = await prisma.submission.findUnique({
-      where: { id },
-      include: { assignment: { select: { id: true, title: true, dueDate: true, allowLate: true } } },
-    });
-    if (!submission) return res.status(404).json({ error: "Submission not found" });
-
-    if (submission.studentId !== req.user.id) {
-      return res.status(403).json({ error: "Chỉ chủ bài nộp mới được cập nhật" });
-    }
-
-    const { content, fileUrl } = req.body;
-
-    if (content && typeof content === "string" && content.length > 100000) {
-      return res.status(400).json({ error: "Nội dung không được quá 100000 ký tự" });
-    }
-    if (fileUrl && typeof fileUrl === "string" && fileUrl.length > 2000) {
-      return res.status(400).json({ error: "URL file không hợp lệ" });
-    }
-
-    // Re-check due date
-    let status = submission.status;
-    if (submission.assignment.dueDate) {
-      const now = new Date();
-      const dueDate = new Date(submission.assignment.dueDate);
-      if (now > dueDate && submission.assignment.allowLate) {
-        status = "LATE_SUBMITTED";
-      }
-    }
-
-    const updated = await prisma.submission.update({
-      where: { id },
-      data: {
-        ...(content !== undefined && { content: content || null }),
-        ...(fileUrl !== undefined && { fileUrl: fileUrl || null }),
-        status,
-        submittedAt: new Date(),
-      },
-      include: {
-        student: { select: { id: true, name: true } },
-        assignment: { select: { id: true, title: true } },
-        grade: { select: { id: true, score: true } },
-      },
-    });
-
-    res.json(updated);
+    res.json(submissions);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
