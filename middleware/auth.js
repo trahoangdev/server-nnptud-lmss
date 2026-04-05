@@ -13,6 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey123";
 /**
  * Xác thực JWT: đảm bảo request có Bearer token hợp lệ.
  * Gắn req.user = { id, email, role, name } sau khi verify.
+ * Trả 401 nếu thiếu token, 403 nếu token không hợp lệ.
  */
 export const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -31,6 +32,8 @@ export const authenticateToken = (req, res, next) => {
 
 /**
  * Phân quyền theo role: chỉ cho phép các role trong danh sách.
+ * Phải dùng SAU authenticateToken (để req.user đã có).
+ * Trả 403 nếu role không nằm trong danh sách cho phép.
  * @param {string[]} roles - Ví dụ: ["TEACHER", "ADMIN"], ["STUDENT"]
  */
 export const authorizeRole = (roles) => {

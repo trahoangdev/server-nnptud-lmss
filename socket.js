@@ -1,5 +1,6 @@
 /**
- * Socket.io - Realtime & Socket
+ * Socket.io - PRD §6 Realtime & Socket
+ * Namespace: / (default) hoặc /lms
  * Rooms: class:{class_id}, assignment:{assignment_id}, submission:{submission_id}, user:{user_id}, teachers
  */
 
@@ -18,6 +19,14 @@ export const initSocket = (httpServer) => {
   io.on("connection", (socket) => {
     console.log(`⚡ Client connected: ${socket.id}`);
 
+    /**
+     * Client gửi: socket.emit("join_room", { userId, role, classId?, assignmentId?, submissionId? })
+     * - user_{userId}: thông báo cá nhân (grade, comment)
+     * - teachers: giáo viên nhận submission:new
+     * - class:{classId}: event liên quan lớp (submission, grade)
+     * - assignment:{assignmentId}: event liên quan bài tập
+     * - submission:{submissionId}: comment realtime trên bài nộp
+     */
     socket.on("join_room", (data) => {
       const { userId, role, classId, assignmentId, submissionId } = data || {};
       if (!userId) return;

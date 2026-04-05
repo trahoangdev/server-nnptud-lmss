@@ -111,7 +111,7 @@ export function getClientIP(req) {
 
 /* ================== CLASS CODE GENERATION ================== */
 
-/** Generate unique 6-char class code */
+/** Generate unique 6-char class code (PRD: code unique, auto generate) */
 function generateClassCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -170,6 +170,7 @@ export function parseId(value) {
 
 /**
  * Validate a string field: non-empty after trim, within maxLength.
+ * Returns trimmed string or null.
  */
 export function validateString(value, maxLength = 500) {
   if (!value || typeof value !== "string") return null;
@@ -193,3 +194,49 @@ export function isValidDate(value) {
   const d = new Date(value);
   return !isNaN(d.getTime());
 }
+
+/* ================== ADMIN SETTINGS DEFAULTS ================== */
+
+export const DEFAULT_SETTINGS = {
+  system: {
+    siteName: "NNPTUD LMS",
+    siteUrl: process.env.SITE_URL || "https://lms.edu.vn",
+    adminEmail: process.env.ADMIN_EMAIL || "admin@lms.edu.vn",
+    maxFileSize: 50,
+    maxStoragePerClass: 5,
+    sessionTimeout: 30,
+    maintenanceMode: false,
+  },
+  security: {
+    twoFactorRequired: false,
+    passwordMinLength: 8,
+    passwordRequireUppercase: true,
+    passwordRequireNumber: true,
+    passwordRequireSpecial: false,
+    maxLoginAttempts: 5,
+    lockoutDuration: 15,
+    sessionConcurrent: true,
+  },
+  email: {
+    smtpHost: process.env.SMTP_HOST || "smtp.gmail.com",
+    smtpPort: process.env.SMTP_PORT || "587",
+    smtpUser: process.env.SMTP_USER || "",
+    smtpSecure: "tls",
+    fromName: "NNPTUD LMS",
+    fromEmail: process.env.SMTP_FROM || "noreply@lms.edu.vn",
+  },
+  backup: {
+    autoBackup: true,
+    backupFrequency: "daily",
+    backupRetention: 30,
+    backupLocation: "local",
+  },
+  notifications: {
+    notifyNewUser: true,
+    notifyNewClass: true,
+    notifyStorageWarning: true,
+    notifySecurityAlert: true,
+    dailyReport: false,
+    weeklyReport: true,
+  },
+};

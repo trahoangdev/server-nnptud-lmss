@@ -13,15 +13,23 @@
   "prisma": {
     "seed": "node prisma/seed.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trahoangdev/server-nnptud-lms.git"
+  },
   "keywords": [
     "nodejs",
     "express",
     "lms",
     "api",
-    "prisma"
+    "mongoose"
   ],
   "author": "",
   "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/trahoangdev/server-nnptud-lms/issues"
+  },
+  "homepage": "https://github.com/trahoangdev/server-nnptud-lms#readme",
   "dependencies": {
     "@prisma/client": "^5.10.2",
     "axios": "^1.13.4",

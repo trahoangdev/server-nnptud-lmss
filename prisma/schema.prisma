@@ -1,5 +1,4 @@
 // Prisma schema - Entities & Data model
-// Mỗi thành viên sẽ thêm model của mình vào đây
 
 generator client {
   provider = "prisma-client-js"
@@ -8,4 +7,242 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ClassStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ClassMemberStatus {
+  ACTIVE
+  LEFT
+}
+
+enum SubmissionStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  LATE_SUBMITTED
+}
+
+model User {
+  id        Int        @id @default(autoincrement())
+  name      String
+  email     String     @unique
+  password  String
+  avatar    String?
+  role      Role       @default(STUDENT)
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  teachingClasses  Class[]       @relation("TeacherClasses")
+  classMemberships  ClassMember[]
+  createdAssignments Assignment[]
+  submissions        Submission[]
+  givenGrades        Grade[]
+  comments           Comment[]
+}
+
+model Class {
+  id          Int         @id @default(autoincrement())
+  name        String
+  code        String      @unique // Mã để student join, auto generate
+  description String?
+  status      ClassStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  teacherId Int
+  teacher   User @relation("TeacherClasses", fields: [teacherId], references: [id])
+
+  members        ClassMember[]
+  assignments    Assignment[]
+  conversations  Conversation[]
+}
+
+model ClassMember {
+  id        Int              @id @default(autoincrement())
+  classId  Int
+  userId   Int
+  joinedAt DateTime         @default(now())
+  status   ClassMemberStatus @default(ACTIVE)
+
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, userId])
+  @@index([userId])
+  @@index([classId])
+}
+
+model Assignment {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  fileUrl     String?   // attachment_url - file đề bài
+  startTime   DateTime? // optional - chỉ hiện sau thời điểm đó
+  dueDate     DateTime?
+  allowLate   Boolean   @default(false)
+  maxScore    Int       @default(10)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  classId Int
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  createdById Int?
+  createdBy   User? @relation(fields: [createdById], references: [id])
+
+  submissions Submission[]
+  comments    Comment[]
+}
+
+model Submission {
+  id            Int              @id @default(autoincrement())
+  content       String?
+  fileUrl       String?
+  submittedAt   DateTime         @default(now())
+  lastUpdatedAt DateTime?
+  status        SubmissionStatus @default(NOT_SUBMITTED)
+
+  assignmentId Int
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  studentId Int
+  student   User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  grade    Grade?
+  comments Comment[]
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId])
+  @@index([studentId])
+}
+
+model Grade {
+  id       Int      @id @default(autoincrement())
+  score    Float
+  gradedAt DateTime @default(now())
+
+  submissionId Int        @unique
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  gradedById Int?
+  gradedBy   User? @relation(fields: [gradedById], references: [id])
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String
+  createdAt DateTime @default(now())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignmentId Int?
+  assignment   Assignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+
+  submissionId Int?
+  submission   Submission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+}
+
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   // JSON string
+  updatedAt DateTime @updatedAt
+}
+
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  userName   String
+  userRole   String
+  action     String
+  actionType String   // "create" | "update" | "delete" | "login" | "other"
+  resource   String   // "User" | "Class" | "Assignment" | "Submission" | "Grade" | "Comment" | "Auth"
+  resourceId String?
+  details    String
+  ipAddress  String?
+  status     String   @default("success") // "success" | "warning" | "error"
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([actionType])
+  @@index([resource])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // recipient
+  type      String   // "submission" | "grade" | "comment" | "system"
+  title     String
+  message   String
+  link      String?  // URL to navigate to
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ─── Conversations / Messaging ───────────────────────────────
+
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  name      String?  // null for DM / auto-generated for class
+  type      String   @default("class") // "class" | "group" | "direct"
+  classId   Int?     // linked class (for class conversations)
+  roomCode  String?  @unique // mã phòng để student tham gia
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  class    Class?               @relation(fields: [classId], references: [id], onDelete: Cascade)
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([classId])
+}
+
+model ConversationMember {
+  id             Int      @id @default(autoincrement())
+  conversationId Int
+  userId         Int
+  joinedAt       DateTime @default(now())
+  lastReadAt     DateTime @default(now()) // track read status
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id             Int      @id @default(autoincrement())
+  conversationId Int
+  senderId       Int
+  content        String
+  type           String   @default("user") // "user" | "system"
+  isRecalled     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
 }
