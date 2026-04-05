@@ -55,7 +55,7 @@ router.get("/notifications", authenticateToken, async (req, res) => {
   }
 });
 
-/** GET /api/notifications/unread-count */
+/** GET /api/notifications/unread-count route*/
 router.get("/notifications/unread-count", authenticateToken, async (req, res) => {
   try {
     const count = await prisma.notification.count({
